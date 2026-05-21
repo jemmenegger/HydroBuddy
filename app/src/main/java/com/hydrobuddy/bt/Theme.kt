@@ -1,0 +1,73 @@
+package com.hydrobuddy.bt
+
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+val ScreenHorizontalPadding = 20.dp
+val ScreenTopPadding = 20.dp
+val HeaderIconSize = 34.dp
+
+private val QuicksandFamily = FontFamily(
+    Font(R.font.quicksand_regular, FontWeight.Normal),
+    Font(R.font.quicksand_semibold, FontWeight.SemiBold),
+    Font(R.font.quicksand_bold, FontWeight.Bold)
+)
+
+private val base = Typography()
+
+private val HydroBuddyTypography = Typography(
+    displayLarge = base.displayLarge.copy(fontFamily = QuicksandFamily),
+    displayMedium = base.displayMedium.copy(fontFamily = QuicksandFamily),
+    displaySmall = base.displaySmall.copy(fontFamily = QuicksandFamily),
+    headlineLarge = base.headlineLarge.copy(fontFamily = QuicksandFamily, fontWeight = FontWeight.Bold),
+    headlineMedium = base.headlineMedium.copy(fontFamily = QuicksandFamily, fontWeight = FontWeight.Bold),
+    headlineSmall = TextStyle(
+        fontFamily = QuicksandFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 38.sp * 0.55f
+    ),
+    titleLarge = TextStyle(
+        fontFamily = QuicksandFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 28.sp * 0.55f
+    ),
+    titleMedium = TextStyle(
+        fontFamily = QuicksandFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 24.sp * 0.55f
+    ),
+    titleSmall = base.titleSmall.copy(fontFamily = QuicksandFamily, fontWeight = FontWeight.SemiBold),
+    bodyLarge = TextStyle(
+        fontFamily = QuicksandFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 20.sp * 0.55f
+    ),
+    bodyMedium = TextStyle(
+        fontFamily = QuicksandFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 18.sp * 0.55f
+    ),
+    bodySmall = TextStyle(
+        fontFamily = QuicksandFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 14.sp * 0.55f
+    ),
+    labelLarge = base.labelLarge.copy(fontFamily = QuicksandFamily, fontWeight = FontWeight.SemiBold),
+    labelMedium = base.labelMedium.copy(fontFamily = QuicksandFamily, fontWeight = FontWeight.SemiBold),
+    labelSmall = base.labelSmall.copy(fontFamily = QuicksandFamily, fontWeight = FontWeight.SemiBold)
+)
+
+@Composable
+fun HydroBuddyTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        typography = HydroBuddyTypography,
+        content = content
+    )
+}
