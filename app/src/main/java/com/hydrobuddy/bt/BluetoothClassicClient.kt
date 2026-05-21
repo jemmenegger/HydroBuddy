@@ -13,7 +13,10 @@ import kotlin.concurrent.thread
  * Minimal RFCOMM (SPP) client. The Arduino bottle is the source of truth for
  * button presses; the phone listens for newline-terminated commands.
  *
- * Recognised inbound line: "SIP" (logs one sip via [onSip]).
+ * Recognised inbound lines:
+ *   - "SIP" or "SIP,<count>,<gain>"   -> logs one sip via [onSip]
+ *   - "HEALTH,<n>"                    -> ignored (informational)
+ *   - "GET_ACK"                       -> ignored (handshake)
  * Outbound: arbitrary lines via [sendLine].
  */
 class BluetoothClassicClient {
@@ -37,7 +40,10 @@ class BluetoothClassicClient {
             try {
                 while (true) {
                     val line = reader.readLine() ?: break
-                    if (line.trim().equals("SIP", ignoreCase = true)) {
+                    val trimmed = line.trim()
+                    if (trimmed.isEmpty()) continue
+                    val head = trimmed.substringBefore(',').trim()
+                    if (head.equals("SIP", ignoreCase = true)) {
                         this.onSip?.invoke()
                     }
                 }

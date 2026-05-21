@@ -114,11 +114,13 @@ class MainActivity : ComponentActivity() {
                 activeTracker.applyEntryEdit(logEntries, entryId, type, sipCount, preset)
                 persistEntries()
                 tick++
+                pushHealthToArduino()
             },
             onDeleteEntry = { entryId ->
                 activeTracker.deleteEntry(logEntries, entryId)
                 persistEntries()
                 tick++
+                pushHealthToArduino()
             }
         )
     }
@@ -129,6 +131,7 @@ class MainActivity : ComponentActivity() {
         lastGain = SIP_HEALTH_GAIN
         feedbackTick++
         tick++
+        pushHealthToArduino()
     }
 
     private fun handlePreset(activeTracker: WaterTrackerController, preset: PresetDrink) {
@@ -137,6 +140,19 @@ class MainActivity : ComponentActivity() {
         lastGain = preset.healthGain
         feedbackTick++
         tick++
+        pushHealthToArduino()
+    }
+
+    private fun pushHealthToArduino() {
+        if (!btClient.isConnected()) return
+        val activeTracker = tracker ?: return
+        val health = activeTracker.snapshot().health
+        thread {
+            try {
+                btClient.sendLine("SET_HEALTH,$health")
+            } catch (_: Exception) {
+            }
+        }
     }
 
     @Composable
@@ -325,6 +341,7 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     connectedDeviceAddress = device.address
                     statusText = "Connected: ${device.name ?: device.address}"
+                    pushHealthToArduino()
                 }
             } catch (e: Exception) {
                 runOnUiThread {

@@ -19,8 +19,18 @@
  */
 
 #include <Wire.h>
+#include <EEPROM.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+
+// ---------- Board sanity check ----------
+// This sketch requires a second hardware UART (Serial1), which exists on
+// ATmega32U4 boards (Arduino Leonardo / Dreamer Nano v4.1 / Pro Micro / etc.).
+// If you see this error, set: Tools > Board > Arduino AVR Boards > Arduino Leonardo
+#if !defined(HAVE_HWSERIAL1) && !defined(SERIAL_PORT_HARDWARE1) && !defined(__AVR_ATmega32U4__)
+  #error "Serial1 is not available on this board. Select 'Arduino Leonardo' (or another ATmega32U4 board) under Tools > Board."
+#endif
+#define BTSerial Serial1
 
 // ---------- Hardware configuration ----------
 constexpr uint8_t OLED_ADDR    = 0x3C;
@@ -30,10 +40,18 @@ constexpr int     OLED_RESET   = -1;
 constexpr uint8_t BUTTON_PIN   = 4;
 
 // ---------- Buddy logic ----------
-constexpr int     INITIAL_BUDDY_HEALTH = 75;
 constexpr int     SIP_HEALTH_GAIN      = 8;
 constexpr int     LOW_HEALTH_THRESHOLD = 40;
 constexpr unsigned long MAX_TIME_WITHOUT_DRINK_MS = 60UL * 60UL * 1000UL;
+
+// ---------- EEPROM persistence ----------
+// The Arduino is "unconfigured" on first boot - it must be paired with the
+// phone app once before showing any buddy stats. The pairing state and the
+// last known health are stored in EEPROM so they survive power cycles.
+constexpr int  EEPROM_MAGIC_ADDR  = 0;
+constexpr int  EEPROM_HEALTH_ADDR = 1;
+constexpr int  EEPROM_PAIRED_ADDR = 2;
+constexpr uint8_t EEPROM_MAGIC_VAL = 0xA7;
 
 // ---------- Timing ----------
 constexpr unsigned long DEBOUNCE_MS         = 250;
@@ -45,7 +63,8 @@ constexpr unsigned long BT_BUFFER_MAX       = 64;
 // ---------- Globals ----------
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 
-int  buddyHealth      = INITIAL_BUDDY_HEALTH;
+int  buddyHealth      = 0;
+bool pairedOnce       = false;
 unsigned long lastSipMillis = 0;
 
 int  lastButtonReading   = HIGH;
@@ -64,7 +83,7 @@ String btBuffer;
 // ---------- Setup ----------
 void setup() {
   Serial.begin(9600);
-  Serial1.begin(9600);
+  BTSerial.begin(9600);
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   lastButtonReading = digitalRead(BUTTON_PIN);
@@ -78,11 +97,45 @@ void setup() {
   display.clearDisplay();
   display.display();
 
+  loadFromEEPROM();
   lastSipMillis = millis();
-  drawScreen(false);
+
+  if (pairedOnce) {
+    drawScreen(false);
+  } else {
+    drawPairingScreen();
+  }
   lastDrawMs = millis();
 
   btBuffer.reserve(BT_BUFFER_MAX);
+}
+
+// ---------- EEPROM helpers ----------
+void loadFromEEPROM() {
+  uint8_t magic = EEPROM.read(EEPROM_MAGIC_ADDR);
+  if (magic != EEPROM_MAGIC_VAL) {
+    EEPROM.update(EEPROM_MAGIC_ADDR, EEPROM_MAGIC_VAL);
+    EEPROM.update(EEPROM_HEALTH_ADDR, 0);
+    EEPROM.update(EEPROM_PAIRED_ADDR, 0);
+    pairedOnce  = false;
+    buddyHealth = 0;
+    return;
+  }
+  uint8_t h = EEPROM.read(EEPROM_HEALTH_ADDR);
+  if (h > 100) h = 100;
+  buddyHealth = h;
+  pairedOnce  = EEPROM.read(EEPROM_PAIRED_ADDR) == 1;
+}
+
+void saveHealthToEEPROM() {
+  uint8_t v = (uint8_t)constrain(buddyHealth, 0, 100);
+  EEPROM.update(EEPROM_HEALTH_ADDR, v);
+}
+
+void markPairedIfNeeded() {
+  if (pairedOnce) return;
+  pairedOnce = true;
+  EEPROM.update(EEPROM_PAIRED_ADDR, 1);
 }
 
 // ---------- Main loop ----------
@@ -112,12 +165,21 @@ void handleButton() {
 }
 
 void onSipPressed() {
+  // Until the phone app has talked to us at least once, the Arduino has no
+  // valid health to display - just keep nagging the user to pair.
+  if (!pairedOnce) {
+    drawPairingScreen();
+    lastDrawMs = millis();
+    return;
+  }
+
   applyHealthGain(SIP_HEALTH_GAIN);
+  saveHealthToEEPROM();
   lastSipMillis = millis();
   triggerFeedback(SIP_HEALTH_GAIN);
 
-  Serial1.print(F("SIP,1,"));
-  Serial1.println(SIP_HEALTH_GAIN);
+  BTSerial.print(F("SIP,1,"));
+  BTSerial.println(SIP_HEALTH_GAIN);
   sendHealth();
 
   Serial.print(F("SIP -> health=")); Serial.println(buddyHealth);
@@ -132,12 +194,12 @@ void applyHealthGain(int gain) {
 }
 
 void sendHealth() {
-  Serial1.print(F("HEALTH,"));
-  Serial1.println(buddyHealth);
+  BTSerial.print(F("HEALTH,"));
+  BTSerial.println(buddyHealth);
 }
 
 void sendAck() {
-  Serial1.println(F("GET_ACK"));
+  BTSerial.println(F("GET_ACK"));
 }
 
 // ---------- Feedback animation (non-blocking) ----------
@@ -167,8 +229,8 @@ void updateFeedback() {
 
 // ---------- Bluetooth I/O ----------
 void readBluetooth() {
-  while (Serial1.available()) {
-    char c = (char)Serial1.read();
+  while (BTSerial.available()) {
+    char c = (char)BTSerial.read();
     if (c == '\n' || c == '\r') {
       if (btBuffer.length() > 0) {
         handleBluetoothLine(btBuffer);
@@ -190,6 +252,11 @@ void handleBluetoothLine(String line) {
 
   Serial.print(F("BT< ")); Serial.println(line);
 
+  // Any valid line from the app counts as "we are talking to the phone" -
+  // remember that so future boots show the buddy screen, not the pairing one.
+  bool wasUnpaired = !pairedOnce;
+  markPairedIfNeeded();
+
   if (line.equalsIgnoreCase("GET_STATE")) {
     sendAck();
     sendHealth();
@@ -201,6 +268,7 @@ void handleBluetoothLine(String line) {
     if (v < 0) v = 0;
     if (v > 100) v = 100;
     buddyHealth = v;
+    saveHealthToEEPROM();
     sendAck();
     drawScreen(false);
     lastDrawMs = millis();
@@ -210,6 +278,7 @@ void handleBluetoothLine(String line) {
   if (line.startsWith("LOG_GAIN,")) {
     int gain = line.substring(9).toInt();
     applyHealthGain(gain);
+    saveHealthToEEPROM();
     lastSipMillis = millis();
     triggerFeedback(gain);
     sendAck();
@@ -218,7 +287,12 @@ void handleBluetoothLine(String line) {
   }
 
   if (line.equalsIgnoreCase("ACK")) {
-    // app acknowledged - nothing to do
+    // First-time pairing: even a bare ACK means the phone is talking to us.
+    // Switch off the pairing screen on the next redraw.
+    if (wasUnpaired) {
+      drawScreen(false);
+      lastDrawMs = millis();
+    }
     return;
   }
 
@@ -228,10 +302,13 @@ void handleBluetoothLine(String line) {
 // ---------- Drawing ----------
 void maybeRedraw() {
   if (feedbackActive) return;
-  if (millis() - lastDrawMs >= REDRAW_INTERVAL_MS) {
+  if (millis() - lastDrawMs < REDRAW_INTERVAL_MS) return;
+  if (pairedOnce) {
     drawScreen(false);
-    lastDrawMs = millis();
+  } else {
+    drawPairingScreen();
   }
+  lastDrawMs = millis();
 }
 
 int healthState() {
@@ -306,6 +383,34 @@ void drawScreen(bool isFeedback) {
   int hy = OLED_HEIGHT - (int)hh - 2;
   display.setCursor(hx, hy);
   display.print(healthBuf);
+
+  display.display();
+}
+
+void drawPairingScreen() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  const char* title = "HydroBuddy";
+  display.setTextSize(2);
+  int16_t tx1, ty1; uint16_t tw, th;
+  display.getTextBounds(title, 0, 0, &tx1, &ty1, &tw, &th);
+  display.setCursor((OLED_WIDTH - (int)tw) / 2, 6);
+  display.print(title);
+
+  const char* l1 = "Pair to phone";
+  const char* l2 = "to start";
+  display.setTextSize(1);
+
+  int16_t l1x1, l1y1; uint16_t l1w, l1h;
+  display.getTextBounds(l1, 0, 0, &l1x1, &l1y1, &l1w, &l1h);
+  display.setCursor((OLED_WIDTH - (int)l1w) / 2, 34);
+  display.print(l1);
+
+  int16_t l2x1, l2y1; uint16_t l2w, l2h;
+  display.getTextBounds(l2, 0, 0, &l2x1, &l2y1, &l2w, &l2h);
+  display.setCursor((OLED_WIDTH - (int)l2w) / 2, 48);
+  display.print(l2);
 
   display.display();
 }
