@@ -9,6 +9,16 @@
 /.idea/assetWizardSettings.xml
 .DS_Store
 /build
+/app/build
 /captures
 .externalNativeBuild
 .cxx
+/.idea/vcs.xml
+/.idea/deploymentTargetSelector.xml
+/.idea/deviceManager.xml
+/.idea/inspectionProfiles/
+*.apk
+*.ap_
+*.aab
+.cxx/
+local.properties

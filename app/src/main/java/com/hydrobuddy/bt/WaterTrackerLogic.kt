@@ -13,18 +13,15 @@ import kotlin.math.roundToInt
  */
 
 const val INITIAL_BUDDY_HEALTH: Float = 75f
+const val MAX_BUDDY_HEALTH: Float = 99f
+const val MAX_BUDDY_HEALTH_INT: Int = 99
 const val GRACE_PERIOD_MINUTES: Float = 20f
 const val BASE_DRAIN_PER_MINUTE: Float = 0.8f
 
 const val SIP_HEALTH_GAIN: Int = 8
 const val SIP_GROUPING_WINDOW_MS: Long = 30_000L
 
-const val LOW_HEALTH_THRESHOLD: Float = 40f
-const val MAX_TIME_WITHOUT_DRINK_MINUTES: Float = 60f
-const val MIN_REMINDER_GAP_MINUTES: Float = 20f
-
 const val TRACKER_TICK_MS: Long = 60_000L
-const val REMINDER_CHECK_MS: Long = 5L * 60L * 1000L
 
 enum class LogEntryType { Sip, Preset }
 
@@ -52,8 +49,7 @@ data class LogEntry(
 data class BuddyState(
     val health: Float,
     val lastDrinkAt: Long,
-    val lastUpdatedAt: Long,
-    val lastReminderAt: Long?
+    val lastUpdatedAt: Long
 )
 
 data class BuddySnapshot(
@@ -118,7 +114,7 @@ fun applyDepletionBetween(
     if (drainStart >= toMillis) return health
     val minutes = (toMillis - drainStart) / 60_000f
     val loss = BASE_DRAIN_PER_MINUTE * minutes * bodyMultiplier
-    return (health - loss).coerceIn(0f, 100f)
+    return (health - loss).coerceIn(0f, MAX_BUDDY_HEALTH)
 }
 
 fun shouldGroupWithLastSip(lastEntry: LogEntry?, now: Long): Boolean {
@@ -134,8 +130,7 @@ fun shouldGroupWithLastSip(lastEntry: LogEntry?, now: Long): Boolean {
 fun recalculateBuddyFromHistory(
     entries: List<LogEntry>,
     bodyMultiplier: Float,
-    now: Long = System.currentTimeMillis(),
-    lastReminderAt: Long? = null
+    now: Long = System.currentTimeMillis()
 ): BuddyState {
     val zone = ZoneId.systemDefault()
     val startOfDay = Instant.ofEpochMilli(now)
@@ -161,7 +156,7 @@ fun recalculateBuddyFromHistory(
             lastDrinkAt = lastDrinkAt,
             bodyMultiplier = bodyMultiplier
         )
-        health = (health + entry.healthGain).coerceIn(0f, 100f)
+        health = (health + entry.healthGain).coerceIn(0f, MAX_BUDDY_HEALTH)
         lastDrinkAt = entry.timestampMillis
         lastUpdatedAt = entry.timestampMillis
     }
@@ -177,8 +172,7 @@ fun recalculateBuddyFromHistory(
     return BuddyState(
         health = health,
         lastDrinkAt = lastDrinkAt,
-        lastUpdatedAt = now,
-        lastReminderAt = lastReminderAt
+        lastUpdatedAt = now
     )
 }
 

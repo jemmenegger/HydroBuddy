@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -45,6 +46,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,14 +79,8 @@ import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-private val GradientStart = Color(0xFF90CDF3)
-private val GradientMiddle = Color(0xFF71AED5)
-private val GradientEnd = Color(0xFF338AB9)
 private val BarFill = Color(0xFF8DC3E5)
 private val BarBackground = Color(0xFFE6EFF5)
-private val ButtonColor = Color(0xFF338AB8)
-private val MainText = Color(0xFF1B4F72)
-private val ScreenBackground = Color(0xFFF2F5F8)
 private val MutedLine = Color(0xFFD8E4ED)
 private val TimeText = Color(0x70144360)
 private val ParticleColor = Color(0xFF8DC3E5)
@@ -105,12 +101,16 @@ fun HydroBuddyHomeScreen(
 ) {
     var selectedTab by remember { mutableStateOf(TopTab.Buddy) }
     var editTarget by remember { mutableStateOf<LogEntry?>(null) }
+    var lastHandledFeedbackTick by rememberSaveable { mutableIntStateOf(0) }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = ScreenBackground) {
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = AppBackground
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = ScreenHorizontalPadding, vertical = ScreenTopPadding),
+                .hydroBuddyScreenPadding(),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Header(title = "HydroBuddy", onSettingsClick = onOpenSettings)
@@ -122,6 +122,8 @@ fun HydroBuddyHomeScreen(
                     snapshot = snapshot,
                     feedbackTick = feedbackTick,
                     lastGain = lastGain,
+                    lastHandledFeedbackTick = lastHandledFeedbackTick,
+                    onFeedbackHandled = { lastHandledFeedbackTick = feedbackTick },
                     onSip = onSip,
                     onPreset = onPreset
                 )
@@ -160,7 +162,11 @@ private fun Header(title: String, onSettingsClick: () -> Unit) {
                 withStyle(
                     style = SpanStyle(
                         brush = Brush.horizontalGradient(
-                            colors = listOf(GradientStart, GradientMiddle, GradientEnd)
+                            colors = listOf(
+                                HydroBuddyColors.gradientStart,
+                                HydroBuddyColors.gradientMiddle,
+                                HydroBuddyColors.gradientEnd
+                            )
                         )
                     )
                 ) { append(title) }
@@ -174,14 +180,14 @@ private fun Header(title: String, onSettingsClick: () -> Unit) {
                 .clickable(onClick = onSettingsClick),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Outlined.Settings, contentDescription = "Settings", tint = GradientEnd)
+            Icon(Icons.Outlined.Settings, contentDescription = "Settings", tint = HydroBuddyColors.gradientEnd)
         }
     }
 }
 
 @Composable
 private fun TopTabSwitcher(selectedTab: TopTab, onSelect: (TopTab) -> Unit) {
-    val gradient = Brush.horizontalGradient(listOf(GradientStart, GradientMiddle, GradientEnd))
+    val gradient = Brush.horizontalGradient(listOf(HydroBuddyColors.gradientStart, HydroBuddyColors.gradientMiddle, HydroBuddyColors.gradientEnd))
     val density = LocalDensity.current
     BoxWithConstraints(
         modifier = Modifier
@@ -235,15 +241,20 @@ private fun TopTabSwitcher(selectedTab: TopTab, onSelect: (TopTab) -> Unit) {
 
 @Composable
 private fun TabLabel(text: String, active: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
             .fillMaxSize()
-            .clickable(onClick = onClick),
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            ),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
-            color = if (active) GradientEnd else Color.White,
+            color = if (active) HydroBuddyColors.gradientEnd else Color.White,
             style = MaterialTheme.typography.titleMedium.copy(fontSize = 24.sp, fontWeight = FontWeight.Bold)
         )
     }
@@ -254,6 +265,8 @@ private fun BuddyTab(
     snapshot: BuddySnapshot,
     feedbackTick: Int,
     lastGain: Int,
+    lastHandledFeedbackTick: Int,
+    onFeedbackHandled: () -> Unit,
     onSip: () -> Unit,
     onPreset: (PresetDrink) -> Unit
 ) {
@@ -264,7 +277,9 @@ private fun BuddyTab(
         healthFraction = snapshot.healthFraction,
         mood = snapshot.mood,
         feedbackTick = feedbackTick,
-        lastGain = lastGain
+        lastGain = lastGain,
+        lastHandledFeedbackTick = lastHandledFeedbackTick,
+        onFeedbackHandled = onFeedbackHandled
     )
 
     Spacer(modifier = Modifier.height(4.dp))
@@ -276,7 +291,7 @@ private fun BuddyTab(
             .height(56.dp)
             .shadow(elevation = 12.dp, shape = RoundedCornerShape(999.dp)),
         shape = RoundedCornerShape(999.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = ButtonColor)
+        colors = ButtonDefaults.buttonColors(containerColor = HydroBuddyColors.accentBlue)
     ) {
         Text(
             "I took a sip",
@@ -296,7 +311,9 @@ private fun BuddyGauge(
     healthFraction: Float,
     mood: BuddyMood,
     feedbackTick: Int,
-    lastGain: Int
+    lastGain: Int,
+    lastHandledFeedbackTick: Int,
+    onFeedbackHandled: () -> Unit
 ) {
     val animatedFraction by animateFloatAsState(
         targetValue = healthFraction,
@@ -310,7 +327,8 @@ private fun BuddyGauge(
     var displayedGain by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(feedbackTick) {
-        if (feedbackTick == 0) return@LaunchedEffect
+        if (feedbackTick == 0 || feedbackTick == lastHandledFeedbackTick) return@LaunchedEffect
+        onFeedbackHandled()
         displayedGain = lastGain
         bounce.snapTo(1f)
         particleProgress.snapTo(0f)
@@ -377,12 +395,12 @@ private fun BuddyGauge(
             Text(
                 text = health.toString(),
                 style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold, fontSize = 56.sp),
-                color = MainText
+                color = HydroBuddyColors.mainText
             )
             Text(
                 text = mood.label,
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
-                color = MainText.copy(alpha = 0.75f)
+                color = HydroBuddyColors.mainText.copy(alpha = 0.75f)
             )
         }
 
@@ -391,7 +409,7 @@ private fun BuddyGauge(
             val yOffsetDp = (-40 - (labelProgress.value * 60f)).dp
             Text(
                 text = "+$displayedGain health",
-                color = Color(0xFF2E7D32).copy(alpha = alpha),
+                color = HydroBuddyColors.gainGreen.copy(alpha = alpha),
                 style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold),
                 modifier = Modifier.offset(y = yOffsetDp)
             )
@@ -455,18 +473,18 @@ private fun PresetButton(preset: PresetDrink, modifier: Modifier = Modifier, onC
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = preset.label,
-                color = MainText,
+                color = HydroBuddyColors.mainText,
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             )
             Text(
                 text = "${preset.amountMl} mL",
-                color = MainText.copy(alpha = 0.65f),
+                color = HydroBuddyColors.mainText.copy(alpha = 0.65f),
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp)
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = "+${preset.healthGain}",
-                color = Color(0xFF2E7D32),
+                color = HydroBuddyColors.gainGreen,
                 style = MaterialTheme.typography.titleSmall.copy(fontSize = 12.sp, fontWeight = FontWeight.Bold)
             )
         }
@@ -492,7 +510,7 @@ private fun HistoryTab(entries: List<LogEntry>, onTapEntry: (LogEntry) -> Unit) 
                 .height(260.dp),
             contentAlignment = Alignment.Center
         ) {
-            Text("Nothing logged yet", color = GradientEnd, fontWeight = FontWeight.Medium)
+            Text("Nothing logged yet", color = HydroBuddyColors.gradientEnd, fontWeight = FontWeight.Medium)
         }
         return
     }
@@ -507,7 +525,7 @@ private fun HistoryTab(entries: List<LogEntry>, onTapEntry: (LogEntry) -> Unit) 
             item(key = "header_$date") {
                 Text(
                     text = formatHistoryDate(date, dayFormatter),
-                    color = MainText,
+                    color = HydroBuddyColors.mainText,
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.padding(top = 10.dp, bottom = 6.dp)
                 )
@@ -548,7 +566,7 @@ private fun HistoryRow(entry: LogEntry, timeText: String, onClick: () -> Unit) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = entryTitle(entry),
-                color = MainText,
+                color = HydroBuddyColors.mainText,
                 style = MaterialTheme.typography.titleMedium.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             )
             Text(
@@ -559,7 +577,7 @@ private fun HistoryRow(entry: LogEntry, timeText: String, onClick: () -> Unit) {
         }
         Text(
             text = "+${entry.healthGain} health",
-            color = Color(0xFF2E7D32),
+            color = HydroBuddyColors.gainGreen,
             style = MaterialTheme.typography.titleMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Bold)
         )
     }
@@ -617,7 +635,7 @@ private fun EntryEditSheet(
         ) {
             Text(
                 text = "Edit entry",
-                color = MainText,
+                color = HydroBuddyColors.mainText,
                 style = MaterialTheme.typography.titleMedium.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold),
                 modifier = Modifier.align(Alignment.CenterHorizontally)
             )
@@ -643,7 +661,7 @@ private fun EntryEditSheet(
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(14.dp))
-                            .background(if (active) GradientEnd else Color(0xFFE6EFF5))
+                            .background(if (active) HydroBuddyColors.gradientEnd else Color(0xFFE6EFF5))
                             .clickable {
                                 selectedType = LogEntryType.Preset
                                 selectedPreset = preset
@@ -654,12 +672,12 @@ private fun EntryEditSheet(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 text = "${preset.amountMl} mL",
-                                color = if (active) Color.White else MainText,
+                                color = if (active) Color.White else HydroBuddyColors.mainText,
                                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             )
                             Text(
                                 text = "+${preset.healthGain}",
-                                color = if (active) Color.White else Color(0xFF2E7D32),
+                                color = if (active) Color.White else HydroBuddyColors.gainGreen,
                                 style = MaterialTheme.typography.titleSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             )
                         }
@@ -695,7 +713,7 @@ private fun EntryEditSheet(
                         .weight(1f)
                         .height(46.dp),
                     shape = RoundedCornerShape(999.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = ButtonColor)
+                    colors = ButtonDefaults.buttonColors(containerColor = HydroBuddyColors.accentBlue)
                 ) {
                     Text("Save", color = Color.White)
                 }
@@ -717,7 +735,7 @@ private fun SipStepperRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(if (isActive) GradientEnd else Color(0xFFE6EFF5))
+            .background(if (isActive) HydroBuddyColors.gradientEnd else Color(0xFFE6EFF5))
             .clickable(onClick = onActivate)
             .padding(vertical = 10.dp, horizontal = 14.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -725,14 +743,14 @@ private fun SipStepperRow(
     ) {
         Text(
             text = "Sips",
-            color = if (isActive) Color.White else MainText,
+            color = if (isActive) Color.White else HydroBuddyColors.mainText,
             style = MaterialTheme.typography.titleSmall.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             StepperButton(symbol = "−", enabled = isActive && count > 1, onClick = onDecrement, isActive = isActive)
             Text(
                 text = count.toString(),
-                color = if (isActive) Color.White else MainText,
+                color = if (isActive) Color.White else HydroBuddyColors.mainText,
                 style = MaterialTheme.typography.titleMedium.copy(fontSize = 16.sp, fontWeight = FontWeight.Bold),
                 textAlign = TextAlign.Center
             )
@@ -749,9 +767,9 @@ private fun StepperButton(symbol: String, enabled: Boolean, isActive: Boolean, o
         else -> Color.White.copy(alpha = 0.4f)
     }
     val fg = when {
-        !isActive -> MainText.copy(alpha = 0.5f)
-        enabled -> GradientEnd
-        else -> GradientEnd.copy(alpha = 0.4f)
+        !isActive -> HydroBuddyColors.mainText.copy(alpha = 0.5f)
+        enabled -> HydroBuddyColors.gradientEnd
+        else -> HydroBuddyColors.gradientEnd.copy(alpha = 0.4f)
     }
     Box(
         modifier = Modifier

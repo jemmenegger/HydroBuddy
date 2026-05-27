@@ -10,14 +10,10 @@ import java.util.UUID
 import kotlin.concurrent.thread
 
 /**
- * Minimal RFCOMM (SPP) client. The Arduino bottle is the source of truth for
- * button presses; the phone listens for newline-terminated commands.
+ * Minimal RFCOMM (SPP) client for HC-06.
  *
- * Recognised inbound lines:
- *   - "SIP" or "SIP,<count>,<gain>"   -> logs one sip via [onSip]
- *   - "HEALTH,<n>"                    -> ignored (informational)
- *   - "GET_ACK"                       -> ignored (handshake)
- * Outbound: arbitrary lines via [sendLine].
+ * Inbound: "SIP" or "SIP,<count>,<gain>" triggers [onSip]. Other lines are ignored.
+ * Outbound: [sendLine] (e.g. SET_HEALTH from the app).
  */
 class BluetoothClassicClient {
     private var socket: BluetoothSocket? = null

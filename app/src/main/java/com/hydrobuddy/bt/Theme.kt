@@ -1,8 +1,14 @@
 package com.hydrobuddy.bt
 
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -13,6 +19,22 @@ import androidx.compose.ui.unit.sp
 val ScreenHorizontalPadding = 20.dp
 val ScreenTopPadding = 20.dp
 val HeaderIconSize = 34.dp
+
+/** Full-screen background; extends under system bars on edge-to-edge devices. */
+val AppBackground = Color.White
+
+object HydroBuddyColors {
+    val gradientStart = Color(0xFF90CDF3)
+    val gradientMiddle = Color(0xFF71AED5)
+    val gradientEnd = Color(0xFF338AB9)
+    val mainText = Color(0xFF1B4F72)
+    val accentBlue = Color(0xFF338AB8)
+    val gainGreen = Color(0xFF2E7D32)
+}
+
+fun Modifier.hydroBuddyScreenPadding(): Modifier = this
+    .windowInsetsPadding(WindowInsets.safeDrawing)
+    .padding(horizontal = ScreenHorizontalPadding, vertical = ScreenTopPadding)
 
 private val QuicksandFamily = FontFamily(
     Font(R.font.quicksand_regular, FontWeight.Normal),

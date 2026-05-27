@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -24,6 +25,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.core.view.WindowCompat
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
@@ -39,28 +41,40 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted -> if (granted) loadPairedDevices() }
+    ) { granted ->
+        if (granted) {
+            loadPairedDevices(autoConnect = pendingStartupAutoConnect)
+        }
+        pendingStartupAutoConnect = false
+    }
 
     private val pairedDevices = mutableStateListOf<BluetoothDevice>()
     private val logEntries = mutableStateListOf<LogEntry>()
 
     private var statusText by mutableStateOf("Idle")
     private var connectedDeviceAddress by mutableStateOf<String?>(null)
+    private var connectingDeviceAddress by mutableStateOf<String?>(null)
     private var appScreen by mutableStateOf(AppScreen.Onboarding)
     private var userProfile by mutableStateOf<UserProfile?>(null)
     private var tracker by mutableStateOf<WaterTrackerController?>(null)
     private var tick by mutableIntStateOf(0)
     private var feedbackTick by mutableIntStateOf(0)
     private var lastGain by mutableIntStateOf(0)
+    private var pendingStartupAutoConnect = false
+    private var startupAutoConnectAttempted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureSystemBars()
         hydrateFromStorage()
-        ensureBluetoothPermissionAndLoad()
+        ensureBluetoothPermissionAndLoad(autoConnect = true)
 
         setContent {
             HydroBuddyTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = AppBackground
+                ) {
                     when (appScreen) {
                         AppScreen.Onboarding -> OnboardingFlow(onComplete = ::onOnboardingDone)
                         AppScreen.Home -> HomeRoute()
@@ -76,28 +90,28 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    private fun configureSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = AndroidColor.WHITE
+        window.navigationBarColor = AndroidColor.WHITE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+        insetsController.isAppearanceLightStatusBars = true
+        insetsController.isAppearanceLightNavigationBars = true
+    }
+
     @Composable
     private fun HomeRoute() {
-        val activeTracker = tracker
-        val profile = userProfile
-        if (activeTracker == null || profile == null) return
+        val activeTracker = tracker ?: return
+        if (userProfile == null) return
 
         LaunchedEffect(Unit) {
             while (true) {
                 delay(TRACKER_TICK_MS)
                 activeTracker.updateBuddy()
                 tick++
-            }
-        }
-        LaunchedEffect(Unit) {
-            HydrationNotifier.ensureChannel(this@MainActivity)
-            while (true) {
-                delay(REMINDER_CHECK_MS)
-                if (activeTracker.shouldRemind()) {
-                    activeTracker.recordReminderSent()
-                    HydrationNotifier.showReminder(this@MainActivity, tick)
-                    tick++
-                }
             }
         }
 
@@ -112,33 +126,31 @@ class MainActivity : ComponentActivity() {
             onPreset = { preset -> handlePreset(activeTracker, preset) },
             onEditEntry = { entryId, type, sipCount, preset ->
                 activeTracker.applyEntryEdit(logEntries, entryId, type, sipCount, preset)
-                persistEntries()
-                tick++
-                pushHealthToArduino()
+                onHistoryChanged()
             },
             onDeleteEntry = { entryId ->
                 activeTracker.deleteEntry(logEntries, entryId)
-                persistEntries()
-                tick++
-                pushHealthToArduino()
+                onHistoryChanged()
             }
         )
     }
 
     private fun handleSip(activeTracker: WaterTrackerController) {
         activeTracker.logSip(logEntries)
-        persistEntries()
         lastGain = SIP_HEALTH_GAIN
         feedbackTick++
-        tick++
-        pushHealthToArduino()
+        onHistoryChanged()
     }
 
     private fun handlePreset(activeTracker: WaterTrackerController, preset: PresetDrink) {
         activeTracker.logPresetDrink(preset, logEntries)
-        persistEntries()
         lastGain = preset.healthGain
         feedbackTick++
+        onHistoryChanged()
+    }
+
+    private fun onHistoryChanged() {
+        persistEntries()
         tick++
         pushHealthToArduino()
     }
@@ -161,23 +173,13 @@ class MainActivity : ComponentActivity() {
             statusText = statusText,
             pairedDevices = pairedDevices,
             connectedDeviceAddress = connectedDeviceAddress,
+            connectingDeviceAddress = connectingDeviceAddress,
             userProfile = userProfile,
-            tracker = tracker,
-            onToggleReminders = { enabled ->
-                tracker?.setRemindersEnabled(enabled)
-                tick++
-            },
-            onToggleVibration = { enabled ->
-                tracker?.setVibrationEnabled(enabled)
-                tick++
-            },
             onBack = { appScreen = AppScreen.Home },
-            onRefresh = { ensureBluetoothPermissionAndLoad() },
+            onRefresh = { ensureBluetoothPermissionAndLoad(autoConnect = false) },
             onToggleConnection = { device ->
                 if (connectedDeviceAddress == device.address && btClient.isConnected()) {
-                    btClient.close()
-                    connectedDeviceAddress = null
-                    statusText = "Disconnected"
+                    disconnectDevice()
                 } else {
                     connectToDevice(device)
                 }
@@ -284,29 +286,29 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun clearAllAppData() {
-        btClient.close()
-        connectedDeviceAddress = null
+        disconnectDevice(clearLastDevice = true)
         logEntries.clear()
         userProfile = null
         tracker = null
         prefs.edit { clear() }
-        getSharedPreferences("hydro_buddy_state", Context.MODE_PRIVATE).edit { clear() }
+        getSharedPreferences(WaterTrackerController.STATE_PREFS_NAME, Context.MODE_PRIVATE).edit { clear() }
     }
 
-    private fun ensureBluetoothPermissionAndLoad() {
+    private fun ensureBluetoothPermissionAndLoad(autoConnect: Boolean) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val granted = ContextCompat.checkSelfPermission(
                 this, Manifest.permission.BLUETOOTH_CONNECT
             ) == PackageManager.PERMISSION_GRANTED
             if (!granted) {
+                pendingStartupAutoConnect = autoConnect
                 permissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
                 return
             }
         }
-        loadPairedDevices()
+        loadPairedDevices(autoConnect = autoConnect)
     }
 
-    private fun loadPairedDevices() {
+    private fun loadPairedDevices(autoConnect: Boolean = false) {
         pairedDevices.clear()
         if (!hasBluetoothConnectPermission()) {
             statusText = "Bluetooth permission required"
@@ -324,9 +326,19 @@ class MainActivity : ComponentActivity() {
             }
             pairedDevices.addAll(adapter.bondedDevices.sortedBy { it.name ?: it.address })
             statusText = "Found ${pairedDevices.size} paired device(s)"
+            if (autoConnect) maybeAutoConnectLastDevice()
         } catch (_: SecurityException) {
             statusText = "Bluetooth permission denied"
         }
+    }
+
+    private fun maybeAutoConnectLastDevice() {
+        if (startupAutoConnectAttempted) return
+        startupAutoConnectAttempted = true
+        if (btClient.isConnected() || connectedDeviceAddress != null || connectingDeviceAddress != null) return
+        val lastAddress = prefs.getString(KEY_LAST_CONNECTED_DEVICE, null) ?: return
+        val device = pairedDevices.firstOrNull { it.address == lastAddress } ?: return
+        connectToDevice(device)
     }
 
     private fun connectToDevice(device: BluetoothDevice) {
@@ -334,18 +346,17 @@ class MainActivity : ComponentActivity() {
             statusText = "Bluetooth permission required"
             return
         }
+        if (connectingDeviceAddress != null) return
+        connectingDeviceAddress = device.address
         statusText = "Connecting to ${device.name ?: device.address}..."
         thread {
             try {
                 btClient.connect(device) { runOnUiThread { logSipFromArduino() } }
-                runOnUiThread {
-                    connectedDeviceAddress = device.address
-                    statusText = "Connected: ${device.name ?: device.address}"
-                    pushHealthToArduino()
-                }
+                runOnUiThread { onDeviceConnected(device) }
             } catch (e: Exception) {
                 runOnUiThread {
                     connectedDeviceAddress = null
+                    connectingDeviceAddress = null
                     statusText = if (e is SecurityException) {
                         "Bluetooth permission denied"
                     } else {
@@ -361,6 +372,24 @@ class MainActivity : ComponentActivity() {
         handleSip(activeTracker)
     }
 
+    private fun onDeviceConnected(device: BluetoothDevice) {
+        connectedDeviceAddress = device.address
+        connectingDeviceAddress = null
+        statusText = "Connected: ${device.name ?: device.address}"
+        prefs.edit { putString(KEY_LAST_CONNECTED_DEVICE, device.address) }
+        pushHealthToArduino()
+    }
+
+    private fun disconnectDevice(clearLastDevice: Boolean = false) {
+        btClient.close()
+        connectedDeviceAddress = null
+        connectingDeviceAddress = null
+        statusText = "Disconnected"
+        if (clearLastDevice) {
+            prefs.edit { remove(KEY_LAST_CONNECTED_DEVICE) }
+        }
+    }
+
     private fun hasBluetoothConnectPermission(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             ContextCompat.checkSelfPermission(
@@ -369,14 +398,6 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val PREFS_NAME = "hydro_buddy_prefs"
+        private const val KEY_LAST_CONNECTED_DEVICE = "last_connected_device"
     }
 }
-
-internal enum class AppScreen { Onboarding, Home, Settings }
-
-data class UserProfile(
-    val gender: String,
-    val heightCm: Int,
-    val weightKg: Int,
-    val hiddenDrinkBaselineMl: Int
-)

@@ -10,7 +10,6 @@ import kotlin.math.roundToInt
  *   - profile-driven body multiplier
  *   - buddy health (live + persisted)
  *   - log entries (sip + preset)
- *   - reminder bookkeeping
  *
  * Persistence lives in a single SharedPreferences bag to stay slim.
  */
@@ -24,14 +23,8 @@ class WaterTrackerController(
     private var buddy: BuddyState = BuddyState(
         health = INITIAL_BUDDY_HEALTH,
         lastDrinkAt = System.currentTimeMillis(),
-        lastUpdatedAt = System.currentTimeMillis(),
-        lastReminderAt = null
+        lastUpdatedAt = System.currentTimeMillis()
     )
-
-    var remindersEnabled: Boolean = prefs.getBoolean("reminders_enabled", true)
-        private set
-    var vibrationEnabled: Boolean = prefs.getBoolean("vibration_enabled", true)
-        private set
 
     init {
         load()
@@ -41,10 +34,10 @@ class WaterTrackerController(
     fun snapshot(now: Long = System.currentTimeMillis()): BuddySnapshot {
         ensureDayBoundary(now)
         updateBuddy(now)
-        val rounded = buddy.health.roundToInt().coerceIn(0, 100)
+        val rounded = buddy.health.roundToInt().coerceIn(0, MAX_BUDDY_HEALTH_INT)
         return BuddySnapshot(
             health = rounded,
-            healthFraction = (buddy.health / 100f).coerceIn(0f, 1f),
+            healthFraction = (buddy.health / MAX_BUDDY_HEALTH).coerceIn(0f, 1f),
             mood = BuddyMood.fromHealth(rounded)
         )
     }
@@ -73,7 +66,7 @@ class WaterTrackerController(
         updateBuddy(now)
         val gain = SIP_HEALTH_GAIN
         buddy = buddy.copy(
-            health = (buddy.health + gain).coerceIn(0f, 100f),
+            health = (buddy.health + gain).coerceIn(0f, MAX_BUDDY_HEALTH),
             lastDrinkAt = now,
             lastUpdatedAt = now
         )
@@ -109,7 +102,7 @@ class WaterTrackerController(
     ): LogEntry {
         updateBuddy(now)
         buddy = buddy.copy(
-            health = (buddy.health + preset.healthGain).coerceIn(0f, 100f),
+            health = (buddy.health + preset.healthGain).coerceIn(0f, MAX_BUDDY_HEALTH),
             lastDrinkAt = now,
             lastUpdatedAt = now
         )
@@ -175,37 +168,9 @@ class WaterTrackerController(
         buddy = recalculateBuddyFromHistory(
             entries = entries,
             bodyMultiplier = bodyMultiplier,
-            now = now,
-            lastReminderAt = buddy.lastReminderAt
+            now = now
         )
         persist()
-    }
-
-    fun shouldRemind(now: Long = System.currentTimeMillis()): Boolean {
-        if (!remindersEnabled) return false
-        ensureDayBoundary(now)
-        updateBuddy(now)
-        val minutesSinceDrink = (now - buddy.lastDrinkAt) / 60_000f
-        val minutesSinceReminder = buddy.lastReminderAt?.let { (now - it) / 60_000f }
-            ?: Float.MAX_VALUE
-        val healthLow = buddy.health < LOW_HEALTH_THRESHOLD
-        val gapLong = minutesSinceDrink >= MAX_TIME_WITHOUT_DRINK_MINUTES
-        return (healthLow || gapLong) && minutesSinceReminder >= MIN_REMINDER_GAP_MINUTES
-    }
-
-    fun recordReminderSent(now: Long = System.currentTimeMillis()) {
-        buddy = buddy.copy(lastReminderAt = now)
-        persist()
-    }
-
-    fun setRemindersEnabled(enabled: Boolean) {
-        remindersEnabled = enabled
-        prefs.edit { putBoolean("reminders_enabled", enabled) }
-    }
-
-    fun setVibrationEnabled(enabled: Boolean) {
-        vibrationEnabled = enabled
-        prefs.edit { putBoolean("vibration_enabled", enabled) }
     }
 
     private fun ensureDayBoundary(now: Long) {
@@ -221,8 +186,7 @@ class WaterTrackerController(
         buddy = BuddyState(
             health = prefs.getFloat("buddy_health", INITIAL_BUDDY_HEALTH),
             lastDrinkAt = prefs.getLong("buddy_last_drink_at", now),
-            lastUpdatedAt = prefs.getLong("buddy_last_updated_at", now),
-            lastReminderAt = prefs.getLong("buddy_last_reminder_at", 0L).takeIf { it > 0L }
+            lastUpdatedAt = prefs.getLong("buddy_last_updated_at", now)
         )
     }
 
@@ -232,16 +196,15 @@ class WaterTrackerController(
             putFloat("buddy_health", buddy.health)
             putLong("buddy_last_drink_at", buddy.lastDrinkAt)
             putLong("buddy_last_updated_at", buddy.lastUpdatedAt)
-            putLong("buddy_last_reminder_at", buddy.lastReminderAt ?: 0L)
-            putBoolean("reminders_enabled", remindersEnabled)
-            putBoolean("vibration_enabled", vibrationEnabled)
         }
     }
 
     companion object {
+        const val STATE_PREFS_NAME = "hydro_buddy_state"
+
         fun create(context: Context, profile: UserProfile): WaterTrackerController =
             WaterTrackerController(
-                prefs = context.getSharedPreferences("hydro_buddy_state", Context.MODE_PRIVATE),
+                prefs = context.getSharedPreferences(STATE_PREFS_NAME, Context.MODE_PRIVATE),
                 profile = profile
             )
     }

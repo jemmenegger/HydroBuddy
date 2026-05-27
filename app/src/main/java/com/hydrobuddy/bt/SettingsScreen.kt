@@ -36,7 +36,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private val AccentBlue = Color(0xFF338AB8)
 private val TitleBlue = Color(0xFF66B0DE)
 private val TextBlue = Color(0xFF184B70)
 private val MutedText = Color(0xFF9CB0C0)
@@ -47,10 +46,8 @@ fun SettingsScreen(
     statusText: String,
     pairedDevices: List<BluetoothDevice>,
     connectedDeviceAddress: String?,
+    connectingDeviceAddress: String?,
     userProfile: UserProfile?,
-    tracker: WaterTrackerController?,
-    onToggleReminders: (Boolean) -> Unit,
-    onToggleVibration: (Boolean) -> Unit,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onToggleConnection: (BluetoothDevice) -> Unit,
@@ -59,7 +56,7 @@ fun SettingsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = ScreenHorizontalPadding, vertical = ScreenTopPadding),
+            .hydroBuddyScreenPadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         SettingsHeader(onBack = onBack)
@@ -69,21 +66,6 @@ fun SettingsScreen(
             ProfileRow(label = "Gender", value = userProfile.gender.replaceFirstChar { it.uppercase() })
             ProfileRow(label = "Height", value = "${userProfile.heightCm} cm")
             ProfileRow(label = "Weight", value = "${userProfile.weightKg} kg")
-            HorizontalDivider()
-        }
-
-        if (tracker != null) {
-            SectionTitle("Reminders")
-            ToggleRow(
-                label = "Reminders",
-                enabled = tracker.remindersEnabled,
-                onToggle = onToggleReminders
-            )
-            ToggleRow(
-                label = "Vibration",
-                enabled = tracker.vibrationEnabled,
-                onToggle = onToggleVibration
-            )
             HorizontalDivider()
         }
 
@@ -111,6 +93,8 @@ fun SettingsScreen(
                 DeviceRow(
                     device = device,
                     connected = connectedDeviceAddress == device.address,
+                    connecting = connectingDeviceAddress == device.address,
+                    busy = connectingDeviceAddress != null,
                     onToggle = { onToggleConnection(device) }
                 )
             }
@@ -176,27 +160,13 @@ private fun ProfileRow(label: String, value: String) {
 }
 
 @Composable
-private fun ToggleRow(label: String, enabled: Boolean, onToggle: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, color = TextBlue, style = MaterialTheme.typography.titleMedium)
-        Button(
-            onClick = { onToggle(!enabled) },
-            shape = RoundedCornerShape(999.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (enabled) AccentBlue else Color(0xFFCDD9E2)
-            )
-        ) {
-            Text(if (enabled) "On" else "Off", color = Color.White)
-        }
-    }
-}
-
-@Composable
-private fun DeviceRow(device: BluetoothDevice, connected: Boolean, onToggle: () -> Unit) {
+private fun DeviceRow(
+    device: BluetoothDevice,
+    connected: Boolean,
+    connecting: Boolean,
+    busy: Boolean,
+    onToggle: () -> Unit
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -213,10 +183,17 @@ private fun DeviceRow(device: BluetoothDevice, connected: Boolean, onToggle: () 
         }
         Button(
             onClick = onToggle,
+            enabled = connected || !busy,
             shape = RoundedCornerShape(999.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)
+            colors = ButtonDefaults.buttonColors(containerColor = HydroBuddyColors.accentBlue)
         ) {
-            Text(if (connected) "Disconnect" else "Connect")
+            Text(
+                when {
+                    connecting -> "Connecting..."
+                    connected -> "Disconnect"
+                    else -> "Connect"
+                }
+            )
         }
     }
     HorizontalDivider()

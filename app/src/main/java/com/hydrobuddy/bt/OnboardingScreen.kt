@@ -46,9 +46,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 
-private val OnboardingStart = Color(0xFF90CDF3)
-private val OnboardingMid = Color(0xFF71AED5)
-private val OnboardingEnd = Color(0xFF338AB9)
 private val OnboardingText = Color(0xFF67AEDA)
 
 @Composable
@@ -63,7 +60,7 @@ fun OnboardingFlow(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = ScreenHorizontalPadding, vertical = ScreenTopPadding),
+            .hydroBuddyScreenPadding(),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Column(
@@ -126,7 +123,7 @@ fun OnboardingFlow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(999.dp))
-                    .background(Brush.horizontalGradient(listOf(OnboardingStart, OnboardingEnd)))
+                    .background(Brush.horizontalGradient(listOf(HydroBuddyColors.gradientStart, HydroBuddyColors.gradientEnd)))
                     .padding(vertical = 14.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -147,9 +144,9 @@ private fun OnboardingProgress(step: Int) {
                 label = "onboarding_progress_$idx"
             )
             val stepColor = when (idx) {
-                0 -> OnboardingStart
-                1 -> OnboardingMid
-                else -> OnboardingEnd
+                0 -> HydroBuddyColors.gradientStart
+                1 -> HydroBuddyColors.gradientMiddle
+                else -> HydroBuddyColors.gradientEnd
             }
             Box(
                 modifier = Modifier
@@ -181,7 +178,7 @@ private fun GenderStep(
                 withStyle(
                     style = SpanStyle(
                         brush = Brush.horizontalGradient(
-                            colors = listOf(OnboardingStart, OnboardingMid, OnboardingEnd)
+                            colors = listOf(HydroBuddyColors.gradientStart, HydroBuddyColors.gradientMiddle, HydroBuddyColors.gradientEnd)
                         )
                     )
                 ) {
@@ -224,7 +221,7 @@ private fun GenderOption(
             modifier = Modifier
                 .size(104.dp)
                 .clip(CircleShape)
-                .background(if (selected) OnboardingEnd else Color(0xFF7DBBE0))
+                .background(if (selected) HydroBuddyColors.gradientEnd else Color(0xFF7DBBE0))
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
@@ -262,7 +259,7 @@ private fun SliderStep(
                 withStyle(
                     style = SpanStyle(
                         brush = Brush.horizontalGradient(
-                            colors = listOf(OnboardingStart, OnboardingMid, OnboardingEnd)
+                            colors = listOf(HydroBuddyColors.gradientStart, HydroBuddyColors.gradientMiddle, HydroBuddyColors.gradientEnd)
                         )
                     )
                 ) {
