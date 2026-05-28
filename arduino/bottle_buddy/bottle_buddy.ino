@@ -20,9 +20,7 @@ constexpr int     OLED_RESET   = -1;
 constexpr uint8_t BUTTON_PIN   = 4;
 
 constexpr int     MAX_BUDDY_HEALTH     = 99;
-constexpr int     LOW_HEALTH_THRESHOLD = 40;
 constexpr unsigned long GRACE_PERIOD_MS = 1UL * 60UL * 1000UL; // usually 20 min; 1 min for testing
-constexpr unsigned long MAX_TIME_WITHOUT_DRINK_MS = 60UL * 60UL * 1000UL;
 
 // --- EEPROM: magic byte, health 0–99, paired-once flag ---
 constexpr int  EEPROM_MAGIC_ADDR  = 0;
@@ -70,11 +68,27 @@ const uint8_t PROGMEM kSpriteHappy46[] = {
   0x00, 0x1F, 0x80, 0x07, 0xE0, 0x00, 0x00, 0x0F, 0xC0, 0x0F, 0xC0, 0x00,
 };
 
+// 20x40: trimmed 4px from left of source art to remove stray edge pixels.
+constexpr int BT_OFFLINE_ICON_W = 20;
+constexpr int BT_OFFLINE_ICON_H = 40;
+
+const uint8_t PROGMEM kBtOfflineIcon20x40[] = {
+  0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0xc0, 0x00, 0x03, 0xc0, 0x00,
+  0x03, 0xf0, 0x00, 0x03, 0xf0, 0x00, 0x03, 0x3c, 0x00, 0x03, 0x1e, 0x00,
+  0x03, 0x0f, 0x00, 0x03, 0x07, 0x80, 0x03, 0x03, 0xc0, 0x03, 0x03, 0xc0,
+  0xc3, 0x0f, 0x00, 0xc3, 0x0f, 0x00, 0xf3, 0x3c, 0x00, 0x73, 0x3c, 0x00,
+  0x3f, 0x70, 0x00, 0x1f, 0xe0, 0x00, 0x0f, 0xe0, 0x00, 0x07, 0xc0, 0x00,
+  0x07, 0xc0, 0x00, 0x0f, 0xc0, 0x00, 0x3f, 0xf0, 0x00, 0x3f, 0xf0, 0x00,
+  0xf3, 0x3c, 0x00, 0xf3, 0x3c, 0x00, 0xc3, 0x0f, 0x00, 0xc3, 0x0f, 0x00,
+  0x03, 0x03, 0xc0, 0x03, 0x03, 0xc0, 0x03, 0x07, 0xc0, 0x03, 0x0f, 0x00,
+  0x03, 0x1e, 0x00, 0x03, 0x3c, 0x00, 0x03, 0xb8, 0x00, 0x03, 0xf0, 0x00,
+  0x03, 0xe0, 0x00, 0x03, 0xc0, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00,
+};
+
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 
 int  buddyHealth      = 0;
 bool pairedOnce       = false; // set when app first sends SET_HEALTH (stored in EEPROM)
-unsigned long lastSipMillis = 0;
 
 int  lastButtonReading   = HIGH;
 int  stableButtonState   = HIGH;
@@ -140,7 +154,6 @@ void setup() { // OLED, EEPROM, first frame (offline or connected)
   display.display();
 
   loadFromEEPROM();
-  lastSipMillis = millis();
   displayedBarHealth = (uint8_t)buddyHealth;
 
   redrawCurrentScreen();
@@ -256,6 +269,12 @@ void updateUiEffects() { // expire popups/sparkles; animate health bar toward bu
     sparkleUntilMs = 0;
     changed = true;
   }
+  static bool lastInGrace = false;
+  bool inGrace = justDrankUntilMs > now;
+  if (inGrace != lastInGrace) {
+    lastInGrace = inGrace;
+    changed = true;
+  }
   if (displayedBarHealth != (uint8_t)buddyHealth) {
     int diff = buddyHealth - displayedBarHealth;
     int step = 1;
@@ -322,14 +341,12 @@ void handleBluetoothLine(String line) { // app → LINK,0|1 or SET_HEALTH,<n>
 
   if (!hasReceivedHealthSync) {
     hasReceivedHealthSync = true;
-    lastSipMillis = now - GRACE_PERIOD_MS;
     justDrankUntilMs = 0;
   } else if (v > buddyHealth) {
-    lastSipMillis = now;
     justDrankUntilMs = now + GRACE_PERIOD_MS;
-    showSipFeedback(); // +1 popup, sparkles, fun status (sip, preset, or bottle button)
+    showSipFeedback(); // +1 popup, sparkles, random line (sip, preset, or bottle button)
   } else if (v < buddyHealth) {
-    justDrankUntilMs = 0;
+    justDrankUntilMs = 0; // depletion tick ends grace early
   }
 
   buddyHealth = v;
@@ -385,8 +402,8 @@ void drawDropletFaceOverlay(uint8_t mood) {
   }
 }
 
+// Always one of: random sip line, Just drank (grace), or Drink now! (no blank gap).
 const __FlashStringHelper* statusMessage() {
-  // During +N sip popup: random fun lines (not "Just drank" yet).
   if (sipPopupCount > 0) {
     switch (sipMessageIndex) {
       case 0: return F("Nice!");
@@ -396,18 +413,10 @@ const __FlashStringHelper* statusMessage() {
       default: return F("Slurp!");
     }
   }
-  unsigned long sinceSip = millis() - lastSipMillis;
-  // After popup ends, still in grace: show "Just drank".
   if (justDrankUntilMs > millis()) {
     return F("Just drank");
   }
-  if (buddyHealth < LOW_HEALTH_THRESHOLD ||
-      sinceSip >= MAX_TIME_WITHOUT_DRINK_MS) {
-    return F("Time to drink");
-  }
-  if (buddyHealth >= 80)                return F("Hydrated");
-  if (buddyHealth >= 55)                return F("Drink now");
-  return F("Time to drink");
+  return F("Drink now!");
 }
 
 void drawSparklePlus(int x, int y) {
@@ -492,6 +501,7 @@ void drawHealthBar(int x, int y, int w, int h, int health) {
 }
 
 void drawStatusMessage() {
+  display.fillRect(54, 54, 74, 8, SSD1306_BLACK);
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(54, 54);
@@ -550,34 +560,41 @@ void drawScreen() { // full buddy UI: sprite, health, bar, status, sip popup
   display.display();
 }
 
-void drawCableIcon() {
-  const int plugX = 6;
-  const int plugY = 30;
-  display.fillRect(plugX, plugY, 16, 10, SSD1306_WHITE);
-  display.fillRect(plugX + 3, plugY + 2, 10, 6, SSD1306_BLACK);
-  display.fillRect(plugX - 5, plugY + 2, 4, 2, SSD1306_WHITE);
-  display.fillRect(plugX - 5, plugY + 6, 4, 2, SSD1306_WHITE);
-  display.drawFastVLine(plugX + 8, plugY + 10, 14, SSD1306_WHITE);
-  display.drawLine(plugX + 8, plugY + 24, plugX + 20, plugY + 30, SSD1306_WHITE);
-  display.drawLine(plugX + 20, plugY + 30, plugX + 28, plugY + 30, SSD1306_WHITE);
+void drawBoldCenteredLine(const __FlashStringHelper* text, int y, uint8_t textSize) {
+  display.setTextSize(textSize);
+  int16_t x1, y1;
+  uint16_t tw, th;
+  display.getTextBounds(text, 0, 0, &x1, &y1, &tw, &th);
+  int x = (OLED_WIDTH - (int)tw) / 2;
+  if (x < 0) x = 0;
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(x, y);
+  display.print(text);
+  display.setCursor(x + 1, y);
+  display.print(text);
 }
 
 void drawOfflineScreen() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
+
+  constexpr int kTitleY = 4;
+  constexpr int kBodyTop = 14;
+  constexpr int kIconColumnW = 54;
+
+  drawBoldCenteredLine(F("Not connected"), kTitleY, 1);
+
+  const int iconX = (kIconColumnW - BT_OFFLINE_ICON_W) / 2;
+  const int iconY = kBodyTop + ((OLED_HEIGHT - kBodyTop) - BT_OFFLINE_ICON_H) / 2;
+  display.fillRect(0, iconY, kIconColumnW, BT_OFFLINE_ICON_H, SSD1306_BLACK);
+  display.drawBitmap(
+    iconX, iconY, kBtOfflineIcon20x40,
+    BT_OFFLINE_ICON_W, BT_OFFLINE_ICON_H, SSD1306_WHITE);
+
   display.setTextSize(1);
-
-  int16_t x1, y1;
-  uint16_t tw, th;
-  display.getTextBounds(F("Not connected"), 0, 0, &x1, &y1, &tw, &th);
-  display.setCursor((OLED_WIDTH - (int)tw) / 2, 2);
-  display.print(F("Not connected"));
-
-  drawCableIcon();
-
-  display.setCursor(58, 28);
+  display.setCursor(58, 26);
   display.print(F("Connect in"));
-  display.setCursor(58, 40);
+  display.setCursor(58, 38);
   display.print(F("app Settings"));
 
   display.display();
