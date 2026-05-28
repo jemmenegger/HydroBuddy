@@ -1,3 +1,5 @@
+// Pure buddy math — no Android imports. Used by WaterTrackerController and tests.
+
 package com.hydrobuddy.bt
 
 import java.time.Instant
@@ -5,23 +7,16 @@ import java.time.ZoneId
 import java.util.UUID
 import kotlin.math.roundToInt
 
-/**
- * Pure hydration buddy logic. No Android types here.
- *
- * Concept: forget exact ml tracking. Drinks reward the buddy with health,
- * idle time slowly drains it. One number, friendly model.
- */
-
 const val INITIAL_BUDDY_HEALTH: Float = 75f
 const val MAX_BUDDY_HEALTH: Float = 99f
 const val MAX_BUDDY_HEALTH_INT: Int = 99
-const val GRACE_PERIOD_MINUTES: Float = 20f
+const val GRACE_PERIOD_MINUTES: Float = 20f // no drain for this long after a drink
 const val BASE_DRAIN_PER_MINUTE: Float = 0.8f
 
 const val SIP_HEALTH_GAIN: Int = 8
-const val SIP_GROUPING_WINDOW_MS: Long = 30_000L
+const val SIP_GROUPING_WINDOW_MS: Long = 30_000L // merge rapid sips into one history row
 
-const val TRACKER_TICK_MS: Long = 60_000L
+const val TRACKER_TICK_MS: Long = 60_000L // MainActivity refresh interval
 
 enum class LogEntryType { Sip, Preset }
 
@@ -46,12 +41,14 @@ data class LogEntry(
     val healthGain: Int
 )
 
+/** Live buddy numbers the controller keeps in memory + prefs. */
 data class BuddyState(
     val health: Float,
     val lastDrinkAt: Long,
     val lastUpdatedAt: Long
 )
 
+/** Rounded health + mood label for the home UI. */
 data class BuddySnapshot(
     val health: Int,
     val healthFraction: Float,
@@ -74,6 +71,7 @@ enum class BuddyMood(val label: String) {
     }
 }
 
+/** Estimates daily fluid need from gender/height/weight; drives drain multiplier. */
 fun calculateHiddenDrinkBaselineMl(
     gender: String,
     heightCm: Int,
@@ -86,9 +84,11 @@ fun calculateHiddenDrinkBaselineMl(
     return (raw / 50.0).roundToInt() * 50
 }
 
+/** Higher baseline → slightly faster health drain (0.85–1.25×). */
 fun calculateBodyMultiplier(hiddenDrinkBaselineMl: Int): Float =
     (hiddenDrinkBaselineMl / 1900f).coerceIn(0.85f, 1.25f)
 
+/** Drawable name for mascot image (state1 = happiest … state4 = saddest). */
 fun buddyMascotState(health: Int): String = when {
     health >= 80 -> "state1"
     health >= 55 -> "state2"
@@ -97,9 +97,8 @@ fun buddyMascotState(health: Int): String = when {
 }
 
 /**
- * Health drain between two moments, respecting the post-drink grace period.
- * Drains from [fromMillis] to [toMillis]; treats [lastDrinkAt] as the start of
- * the grace clock.
+ * Lowers health between two timestamps: 20 min grace after last drink, then
+ * BASE_DRAIN_PER_MINUTE × minutes × bodyMultiplier.
  */
 fun applyDepletionBetween(
     health: Float,
@@ -117,16 +116,14 @@ fun applyDepletionBetween(
     return (health - loss).coerceIn(0f, MAX_BUDDY_HEALTH)
 }
 
+/** True if the newest log row is a sip within 30s — we bump sip count instead of new row. */
 fun shouldGroupWithLastSip(lastEntry: LogEntry?, now: Long): Boolean {
     if (lastEntry == null) return false
     if (lastEntry.type != LogEntryType.Sip) return false
     return (now - lastEntry.timestampMillis) <= SIP_GROUPING_WINDOW_MS
 }
 
-/**
- * Rebuild buddy state from the day's log by replaying entries with drain in
- * between. Used after manual edits/deletes to keep buddy honest.
- */
+/** Replays today's history to rebuild health after edit/delete. */
 fun recalculateBuddyFromHistory(
     entries: List<LogEntry>,
     bodyMultiplier: Float,

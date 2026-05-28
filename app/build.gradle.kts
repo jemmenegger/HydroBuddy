@@ -1,3 +1,5 @@
+// Android app module — debug APK: ./gradlew :app:assembleDebug
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")

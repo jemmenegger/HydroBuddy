@@ -38,10 +38,30 @@ Pair the HC-06 in system Bluetooth settings first, then connect in app Settings.
 - OLED: SSD1306 128×64 @ `0x3C`
 - Upload `arduino/bottle_buddy/bottle_buddy.ino` with Leonardo selected in Arduino IDE
 
-Protocol (newline-terminated): `SIP`, `SET_HEALTH,<n>`, `GET_STATE`, `LOG_GAIN,<n>`, `ACK`.
+Bluetooth protocol (newline-terminated): bottle → app `SIP` or `SIP,<count>,<gain>`; app → bottle `SET_HEALTH,<n>`.
 
 ## Buddy logic (app)
 
 - Health drains after a **20 min** grace period following a drink (~0.8/min × body multiplier).
 - One sip: **+8** health (max **99**).
 - App is source of truth when connected; Arduino can log sips offline and sync when paired.
+
+## Reading the code
+
+Open files in this order; each file has **inline comments** on functions and important logic:
+
+1. `WaterTrackerLogic.kt` — health math (no Android)
+2. `WaterTrackerController.kt` — prefs + sip/history
+3. `MainActivity.kt` — navigation, storage, Bluetooth
+4. `HomeScreen.kt` / `SettingsScreen.kt` / `OnboardingScreen.kt` — UI
+5. `BluetoothClassicClient.kt` — HC-06 serial protocol
+6. `arduino/bottle_buddy/bottle_buddy.ino` — OLED + button + bottle BT
+
+### Build commands
+
+```bash
+./gradlew :app:assembleDebug    # build debug APK (needs JDK 17)
+```
+
+- `gradlew` — Gradle wrapper script (Mac/Linux).
+- `gradlew.bat` — same for Windows.

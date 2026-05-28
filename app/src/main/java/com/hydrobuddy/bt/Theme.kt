@@ -1,3 +1,5 @@
+// App-wide colors, Quicksand typography, and safe-area screen padding.
+
 package com.hydrobuddy.bt
 
 import androidx.compose.foundation.layout.WindowInsets
@@ -20,7 +22,6 @@ val ScreenHorizontalPadding = 20.dp
 val ScreenTopPadding = 20.dp
 val HeaderIconSize = 34.dp
 
-/** Full-screen background; extends under system bars on edge-to-edge devices. */
 val AppBackground = Color.White
 
 object HydroBuddyColors {
@@ -32,6 +33,7 @@ object HydroBuddyColors {
     val gainGreen = Color(0xFF2E7D32)
 }
 
+/** Padding that respects notch, status bar, and navigation bar (edge-to-edge). */
 fun Modifier.hydroBuddyScreenPadding(): Modifier = this
     .windowInsetsPadding(WindowInsets.safeDrawing)
     .padding(horizontal = ScreenHorizontalPadding, vertical = ScreenTopPadding)

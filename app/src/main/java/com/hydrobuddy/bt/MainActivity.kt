@@ -1,3 +1,5 @@
+// App entry: screens, SharedPreferences, Bluetooth to bottle, health sync.
+
 package com.hydrobuddy.bt
 
 import android.Manifest
@@ -57,8 +59,8 @@ class MainActivity : ComponentActivity() {
     private var appScreen by mutableStateOf(AppScreen.Onboarding)
     private var userProfile by mutableStateOf<UserProfile?>(null)
     private var tracker by mutableStateOf<WaterTrackerController?>(null)
-    private var tick by mutableIntStateOf(0)
-    private var feedbackTick by mutableIntStateOf(0)
+    private var tick by mutableIntStateOf(0) // bumps every minute so Compose refreshes health
+    private var feedbackTick by mutableIntStateOf(0) // increments on sip/preset → gauge animation
     private var lastGain by mutableIntStateOf(0)
     private var pendingStartupAutoConnect = false
     private var startupAutoConnectAttempted = false
@@ -90,6 +92,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    /** White edge-to-edge bars with dark icons (readable on light background). */
     private fun configureSystemBars() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = AndroidColor.WHITE
@@ -107,6 +110,7 @@ class MainActivity : ComponentActivity() {
         val activeTracker = tracker ?: return
         if (userProfile == null) return
 
+        // Background loop: apply health drain every minute
         LaunchedEffect(Unit) {
             while (true) {
                 delay(TRACKER_TICK_MS)
@@ -149,12 +153,14 @@ class MainActivity : ComponentActivity() {
         onHistoryChanged()
     }
 
+    /** After any drink or history edit: save JSON, refresh UI, push health to bottle. */
     private fun onHistoryChanged() {
         persistEntries()
         tick++
         pushHealthToArduino()
     }
 
+    /** Sends SET_HEALTH,<n> on a worker thread so UI stays responsive. */
     private fun pushHealthToArduino() {
         if (!btClient.isConnected()) return
         val activeTracker = tracker ?: return
@@ -205,6 +211,7 @@ class MainActivity : ComponentActivity() {
         appScreen = AppScreen.Home
     }
 
+    /** Load profile + history if onboarding was completed before. */
     private fun hydrateFromStorage() {
         val done = prefs.getBoolean("onboarding_done", false)
         if (!done) {
@@ -332,6 +339,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Once per cold start: reconnect to last HC-06 if we are not already connected. */
     private fun maybeAutoConnectLastDevice() {
         if (startupAutoConnectAttempted) return
         startupAutoConnectAttempted = true
@@ -367,6 +375,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Bottle physical button sent SIP over Bluetooth — same as in-app sip. */
     private fun logSipFromArduino() {
         val activeTracker = tracker ?: return
         handleSip(activeTracker)

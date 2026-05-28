@@ -1,3 +1,5 @@
+// Which Gradle modules exist in this repo (only :app)
+
 pluginManagement {
     repositories {
         google()

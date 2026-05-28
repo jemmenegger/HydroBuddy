@@ -1,60 +1,37 @@
-/*
- * HydroBuddy - Bottle Buddy Arduino sketch
- *
- * Board:     Dreamer Nano v4.1 / Arduino Leonardo compatible
- * OLED:      0.96" SSD1306 128x64 I2C @ 0x3C  (SDA=D2, SCL=D3)
- * Bluetooth: HC-06 Classic on Serial1 @ 9600  (HC-06 TXD->D0/RX, RXD->D1/TX)
- * Button:    tactile, D4 <-> GND, INPUT_PULLUP (pressed = LOW)
- *
- * Protocol (newline-terminated text over Bluetooth):
- *   Arduino -> App   SIP,1,8 | HEALTH,<n> | GET_ACK
- *   App     -> Arduino   GET_STATE | SET_HEALTH,<n> | LOG_GAIN,<n> | ACK
- *
- * Behaviour:
- *   - Button press logs one sip locally (+8 health), shows feedback,
- *     and notifies the phone if connected.
- *   - When the app sends SET_HEALTH, the local value is overwritten
- *     (app is source of truth when connected).
- *   - Works fully offline if the phone isn't connected.
- */
+// HydroBuddy bottle firmware — Leonardo + SSD1306 OLED + HC-06 (Serial1) + sip button D4.
+// Loop: debounced button → optional SIP to phone → animations → OLED redraw.
+// Phone is source of truth when connected (SET_HEALTH). Bottle sends SIP on physical sip.
 
 #include <Wire.h>
 #include <EEPROM.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-// ---------- Board sanity check ----------
-// This sketch requires a second hardware UART (Serial1), which exists on
-// ATmega32U4 boards (Arduino Leonardo / Dreamer Nano v4.1 / Pro Micro / etc.).
-// If you see this error, set: Tools > Board > Arduino AVR Boards > Arduino Leonardo
+// Leonardo / 32U4 boards have Serial1 for HC-06; other AVR boards will fail here:
 #if !defined(HAVE_HWSERIAL1) && !defined(SERIAL_PORT_HARDWARE1) && !defined(__AVR_ATmega32U4__)
   #error "Serial1 is not available on this board. Select 'Arduino Leonardo' (or another ATmega32U4 board) under Tools > Board."
 #endif
 #define BTSerial Serial1
 
-// ---------- Hardware configuration ----------
+// --- Pins & display ---
 constexpr uint8_t OLED_ADDR    = 0x3C;
 constexpr int     OLED_WIDTH   = 128;
 constexpr int     OLED_HEIGHT  = 64;
 constexpr int     OLED_RESET   = -1;
 constexpr uint8_t BUTTON_PIN   = 4;
 
-// ---------- Buddy logic ----------
+// --- Buddy health (local copy; app overwrites via SET_HEALTH when linked) ---
 constexpr int     SIP_HEALTH_GAIN      = 8;
 constexpr int     MAX_BUDDY_HEALTH     = 99;
 constexpr int     LOW_HEALTH_THRESHOLD = 40;
 constexpr unsigned long MAX_TIME_WITHOUT_DRINK_MS = 60UL * 60UL * 1000UL;
 
-// ---------- EEPROM persistence ----------
-// The Arduino is "unconfigured" on first boot - it must be paired with the
-// phone app once before showing any buddy stats. The pairing state and the
-// last known health are stored in EEPROM so they survive power cycles.
+// --- EEPROM: magic byte, health 0–99, paired-once flag ---
 constexpr int  EEPROM_MAGIC_ADDR  = 0;
 constexpr int  EEPROM_HEALTH_ADDR = 1;
 constexpr int  EEPROM_PAIRED_ADDR = 2;
 constexpr uint8_t EEPROM_MAGIC_VAL = 0xA7;
 
-// ---------- Timing ----------
 constexpr unsigned long DEBOUNCE_MS         = 250;
 constexpr unsigned long SIP_POPUP_MS        = 5000;
 constexpr unsigned long SIP_POPUP_IN_MS     = 180;
@@ -66,14 +43,11 @@ constexpr unsigned long BT_BUFFER_MAX       = 64;
 constexpr unsigned long BT_SYNC_STALE_MS    = 10UL * 60UL * 1000UL;
 constexpr unsigned long BT_SYNCING_MS       = 1500;
 
-// ---------- Sprite sizes ----------
 constexpr int SPRITE_X = 2;
 constexpr int SPRITE_Y = 9;
 constexpr int SPRITE_W = 46;
 constexpr int SPRITE_H = 46;
 
-// ---------- Droplet sprite (PROGMEM) ----------
-// One clean 46x46 base sprite; mood differences are overlaid procedurally.
 const uint8_t PROGMEM kSpriteHappy46[] = {
   0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x07, 0x80, 0x00, 0x00, 0x00, 0x00, 0x04, 0x80, 0x00, 0x00,
@@ -100,13 +74,10 @@ const uint8_t PROGMEM kSpriteHappy46[] = {
   0x00, 0x1F, 0x80, 0x07, 0xE0, 0x00, 0x00, 0x0F, 0xC0, 0x0F, 0xC0, 0x00,
 };
 
-// Expression differences are drawn procedurally to save flash on Leonardo.
-
-// ---------- Globals ----------
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 
 int  buddyHealth      = 0;
-bool pairedOnce       = false;
+bool pairedOnce       = false; // false until app sends any BT line → show "Pair app" screen
 unsigned long lastSipMillis = 0;
 
 int  lastButtonReading   = HIGH;
@@ -128,8 +99,7 @@ unsigned long syncPendingStartedMs = 0;
 
 String btBuffer;
 
-// ---------- Setup ----------
-void setup() {
+void setup() { // OLED, EEPROM, first frame (pairing or buddy)
   Serial.begin(9600);
   BTSerial.begin(9600);
 
@@ -159,8 +129,7 @@ void setup() {
   btBuffer.reserve(BT_BUFFER_MAX);
 }
 
-// ---------- EEPROM helpers ----------
-void loadFromEEPROM() {
+void loadFromEEPROM() { // read health + paired flag; init EEPROM on first boot
   uint8_t magic = EEPROM.read(EEPROM_MAGIC_ADDR);
   if (magic != EEPROM_MAGIC_VAL) {
     EEPROM.update(EEPROM_MAGIC_ADDR, EEPROM_MAGIC_VAL);
@@ -181,22 +150,20 @@ void saveHealthToEEPROM() {
   EEPROM.update(EEPROM_HEALTH_ADDR, v);
 }
 
-void markPairedIfNeeded() {
+void markPairedIfNeeded() { // first app contact flips pairedOnce and saves to EEPROM
   if (pairedOnce) return;
   pairedOnce = true;
   EEPROM.update(EEPROM_PAIRED_ADDR, 1);
 }
 
-// ---------- Main loop ----------
-void loop() {
+void loop() { // button, BT lines, timed UI updates, periodic redraw
   handleButton();
   readBluetooth();
   updateUiEffects();
   maybeRedraw();
 }
 
-// ---------- Button (debounced) ----------
-void handleButton() {
+void handleButton() { // debounce D4; LOW = pressed
   int reading = digitalRead(BUTTON_PIN);
   unsigned long now = millis();
 
@@ -213,9 +180,7 @@ void handleButton() {
   }
 }
 
-void onSipPressed() {
-  // Until the phone app has talked to us at least once, the Arduino has no
-  // valid health to display - just keep nagging the user to pair.
+void onSipPressed() { // +8 health locally, sparkle UI, send SIP,1,8 to phone
   if (!pairedOnce) {
     drawPairingScreen();
     lastDrawMs = millis();
@@ -229,12 +194,8 @@ void onSipPressed() {
 
   BTSerial.print(F("SIP,1,"));
   BTSerial.println(SIP_HEALTH_GAIN);
-  sendHealth();
-
-  Serial.print(F("SIP -> health=")); Serial.println(buddyHealth);
 }
 
-// ---------- Health math ----------
 void applyHealthGain(int gain) {
   long newHealth = (long)buddyHealth + gain;
   if (newHealth > MAX_BUDDY_HEALTH) newHealth = MAX_BUDDY_HEALTH;
@@ -242,16 +203,6 @@ void applyHealthGain(int gain) {
   buddyHealth = (int)newHealth;
 }
 
-void sendHealth() {
-  BTSerial.print(F("HEALTH,"));
-  BTSerial.println(buddyHealth);
-}
-
-void sendAck() {
-  BTSerial.println(F("GET_ACK"));
-}
-
-// ---------- UI effects (non-blocking) ----------
 void recordLocalSip() {
   unsigned long now = millis();
 
@@ -272,7 +223,7 @@ void recordLocalSip() {
   lastDrawMs = now;
 }
 
-void updateUiEffects() {
+void updateUiEffects() { // expire popups/sparkles; animate health bar toward buddyHealth
   unsigned long now = millis();
   bool changed = false;
 
@@ -320,7 +271,6 @@ void noteSyncContact() {
   syncPending = false;
 }
 
-// ---------- Bluetooth I/O ----------
 void readBluetooth() {
   while (BTSerial.available()) {
     char c = (char)BTSerial.read();
@@ -333,29 +283,17 @@ void readBluetooth() {
       if (btBuffer.length() < BT_BUFFER_MAX) {
         btBuffer += c;
       } else {
-        btBuffer = ""; // overflow guard
+        btBuffer = "";
       }
     }
   }
 }
 
-void handleBluetoothLine(String line) {
+void handleBluetoothLine(String line) { // only SET_HEALTH,<n> from app
   line.trim();
   if (line.length() == 0) return;
 
-  Serial.print(F("BT< ")); Serial.println(line);
-
-  // Any valid line from the app counts as "we are talking to the phone" -
-  // remember that so future boots show the buddy screen, not the pairing one.
-  bool wasUnpaired = !pairedOnce;
   markPairedIfNeeded();
-
-  if (line.equalsIgnoreCase("GET_STATE")) {
-    noteSyncContact();
-    sendAck();
-    sendHealth();
-    return;
-  }
 
   if (line.startsWith("SET_HEALTH,")) {
     noteSyncContact();
@@ -364,41 +302,11 @@ void handleBluetoothLine(String line) {
     if (v > MAX_BUDDY_HEALTH) v = MAX_BUDDY_HEALTH;
     buddyHealth = v;
     saveHealthToEEPROM();
-    sendAck();
     drawScreen();
     lastDrawMs = millis();
-    return;
   }
-
-  if (line.startsWith("LOG_GAIN,")) {
-    noteSyncContact();
-    int gain = line.substring(9).toInt();
-    applyHealthGain(gain);
-    saveHealthToEEPROM();
-    lastSipMillis = millis();
-    sparkleUntilMs = millis() + SPARKLE_BURST_MS;
-    drawScreen();
-    lastDrawMs = millis();
-    sendAck();
-    sendHealth();
-    return;
-  }
-
-  if (line.equalsIgnoreCase("ACK")) {
-    noteSyncContact();
-    // First-time pairing: even a bare ACK means the phone is talking to us.
-    // Switch off the pairing screen on the next redraw.
-    if (wasUnpaired) {
-      drawScreen();
-      lastDrawMs = millis();
-    }
-    return;
-  }
-
-  Serial.print(F("Unknown cmd: ")); Serial.println(line);
 }
 
-// ---------- Drawing ----------
 void maybeRedraw() {
   if (millis() - lastDrawMs < REDRAW_INTERVAL_MS) return;
   if (pairedOnce) {
@@ -409,6 +317,7 @@ void maybeRedraw() {
   lastDrawMs = millis();
 }
 
+// Face overlay on droplet: 0=happy (75+), 1=smile (50–74), 2=frown (25–49), 3=sad
 uint8_t currentFaceMood() {
   if (buddyHealth >= 75) return 0;
   if (buddyHealth >= 50) return 1;
@@ -426,19 +335,18 @@ void drawDropletFaceOverlay(uint8_t mood) {
   clearFaceOverlayArea();
 
   switch (mood) {
-    case 1: // okay
-      // Slight smile: visibly different from neutral, but calmer than happy.
+    case 1:
       display.drawLine(SPRITE_X + 18, SPRITE_Y + 33, SPRITE_X + 21, SPRITE_Y + 34, SSD1306_WHITE);
       display.drawFastHLine(SPRITE_X + 21, SPRITE_Y + 34, 5, SSD1306_WHITE);
       display.drawLine(SPRITE_X + 25, SPRITE_Y + 34, SPRITE_X + 28, SPRITE_Y + 33, SSD1306_WHITE);
       display.drawFastHLine(SPRITE_X + 22, SPRITE_Y + 35, 3, SSD1306_WHITE);
       break;
-    case 2: // slightly sad
+    case 2:
       display.drawLine(SPRITE_X + 18, SPRITE_Y + 34, SPRITE_X + 21, SPRITE_Y + 33, SSD1306_WHITE);
       display.drawFastHLine(SPRITE_X + 21, SPRITE_Y + 33, 5, SSD1306_WHITE);
       display.drawLine(SPRITE_X + 25, SPRITE_Y + 33, SPRITE_X + 28, SPRITE_Y + 34, SSD1306_WHITE);
       break;
-    default: // sad
+    default:
       display.drawLine(SPRITE_X + 18, SPRITE_Y + 34, SPRITE_X + 20, SPRITE_Y + 33, SSD1306_WHITE);
       display.drawLine(SPRITE_X + 20, SPRITE_Y + 33, SPRITE_X + 22, SPRITE_Y + 32, SSD1306_WHITE);
       display.drawFastHLine(SPRITE_X + 22, SPRITE_Y + 31, 3, SSD1306_WHITE);
@@ -631,7 +539,7 @@ void drawSipPopup() {
   display.setTextColor(SSD1306_WHITE);
 }
 
-void drawScreen() {
+void drawScreen() { // full buddy UI: sprite, health, bar, status, sip popup
   display.clearDisplay();
 
   drawSparkles();
@@ -647,7 +555,7 @@ void drawScreen() {
   display.display();
 }
 
-void drawPairingScreen() {
+void drawPairingScreen() { // before first app pairing: --/99 and sad face
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   drawSparkles();

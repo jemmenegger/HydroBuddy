@@ -1,3 +1,5 @@
+// First-run flow: gender → height → weight. MainActivity saves profile on complete.
+
 package com.hydrobuddy.bt
 
 import androidx.compose.animation.core.animateFloatAsState
@@ -46,13 +48,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 
-private val OnboardingText = Color(0xFF67AEDA)
-
 @Composable
 fun OnboardingFlow(
     onComplete: (gender: String, heightCm: Int, weightKg: Int) -> Unit
 ) {
-    var step by remember { mutableIntStateOf(1) }
+    var step by remember { mutableIntStateOf(1) } // 1 = gender, 2 = height, 3 = weight
     var selectedGender by remember { mutableStateOf("Male") }
     var height by remember { mutableFloatStateOf(165f) }
     var weight by remember { mutableFloatStateOf(90f) }
@@ -134,7 +134,7 @@ fun OnboardingFlow(
 }
 
 @Composable
-private fun OnboardingProgress(step: Int) {
+private fun OnboardingProgress(step: Int) { // three gradient bars fill as user advances
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         repeat(3) { idx ->
             val targetFill = if (idx < step) 1f else 0f

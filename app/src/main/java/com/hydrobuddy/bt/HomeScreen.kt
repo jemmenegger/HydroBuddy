@@ -1,3 +1,5 @@
+// Home UI: Buddy tab (gauge, sip, presets) and History tab (log list + edit sheet).
+
 package com.hydrobuddy.bt
 
 import androidx.compose.animation.core.Animatable
@@ -87,6 +89,7 @@ private val ParticleColor = Color(0xFF8DC3E5)
 
 enum class TopTab { Buddy, History }
 
+/** Main screen after onboarding: tabs, gauge, and optional entry editor sheet. */
 @Composable
 fun HydroBuddyHomeScreen(
     onOpenSettings: () -> Unit,
@@ -101,6 +104,7 @@ fun HydroBuddyHomeScreen(
 ) {
     var selectedTab by remember { mutableStateOf(TopTab.Buddy) }
     var editTarget by remember { mutableStateOf<LogEntry?>(null) }
+    // Stored here (not inside BuddyGauge) so switching Buddy ↔ History does not replay sip animation
     var lastHandledFeedbackTick by rememberSaveable { mutableIntStateOf(0) }
 
     Surface(
@@ -151,7 +155,7 @@ fun HydroBuddyHomeScreen(
 }
 
 @Composable
-private fun Header(title: String, onSettingsClick: () -> Unit) {
+private fun Header(title: String, onSettingsClick: () -> Unit) { // title + settings gear
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -186,7 +190,7 @@ private fun Header(title: String, onSettingsClick: () -> Unit) {
 }
 
 @Composable
-private fun TopTabSwitcher(selectedTab: TopTab, onSelect: (TopTab) -> Unit) {
+private fun TopTabSwitcher(selectedTab: TopTab, onSelect: (TopTab) -> Unit) { // sliding white pill; tap or drag
     val gradient = Brush.horizontalGradient(listOf(HydroBuddyColors.gradientStart, HydroBuddyColors.gradientMiddle, HydroBuddyColors.gradientEnd))
     val density = LocalDensity.current
     BoxWithConstraints(
@@ -261,7 +265,7 @@ private fun TabLabel(text: String, active: Boolean, modifier: Modifier, onClick:
 }
 
 @Composable
-private fun BuddyTab(
+private fun BuddyTab( // arc gauge, sip button, preset drink grid
     snapshot: BuddySnapshot,
     feedbackTick: Int,
     lastGain: Int,
@@ -306,7 +310,7 @@ private fun BuddyTab(
 }
 
 @Composable
-private fun BuddyGauge(
+private fun BuddyGauge( // health ring, mascot, +N float label on feedbackTick
     health: Int,
     healthFraction: Float,
     mood: BuddyMood,
@@ -327,6 +331,7 @@ private fun BuddyGauge(
     var displayedGain by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(feedbackTick) {
+        // Only animate when feedbackTick is new (sip/preset), not when returning from History tab
         if (feedbackTick == 0 || feedbackTick == lastHandledFeedbackTick) return@LaunchedEffect
         onFeedbackHandled()
         displayedGain = lastGain
@@ -418,7 +423,7 @@ private fun BuddyGauge(
 }
 
 @Composable
-private fun ParticleBurst(progress: Float, modifier: Modifier = Modifier) {
+private fun ParticleBurst(progress: Float, modifier: Modifier = Modifier) { // burst around gauge on sip
     if (progress <= 0f || progress >= 1f) {
         Box(modifier = modifier)
         return
@@ -492,7 +497,7 @@ private fun PresetButton(preset: PresetDrink, modifier: Modifier = Modifier, onC
 }
 
 @Composable
-private fun HistoryTab(entries: List<LogEntry>, onTapEntry: (LogEntry) -> Unit) {
+private fun HistoryTab(entries: List<LogEntry>, onTapEntry: (LogEntry) -> Unit) { // grouped by day, newest first
     val dayFormatter = remember { DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM) }
     val timeFormatter = remember { DateTimeFormatter.ofPattern("HH:mm") }
     val grouped = entries
@@ -610,7 +615,7 @@ private fun entrySubtitle(entry: LogEntry, timeText: String): String = when (ent
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EntryEditSheet(
+private fun EntryEditSheet( // bottom sheet: change sip count, preset, delete
     entry: LogEntry,
     onDismiss: () -> Unit,
     onSave: (LogEntryType, Int?, PresetDrink?) -> Unit,

@@ -1,3 +1,5 @@
+// Settings: profile summary, paired Bluetooth devices (HC-06), reset all data.
+
 package com.hydrobuddy.bt
 
 import android.bluetooth.BluetoothDevice
@@ -76,6 +78,7 @@ fun SettingsScreen(
                 Icon(Icons.Outlined.Refresh, contentDescription = "Refresh paired devices", tint = TextBlue)
             }
         }
+        // Show connection status only while connecting / permission issues
         if (
             statusText.startsWith("Bluetooth", ignoreCase = true) ||
             statusText.startsWith("Enable Bluetooth", ignoreCase = true) ||
@@ -83,6 +86,7 @@ fun SettingsScreen(
         ) {
             Text(statusText, style = MaterialTheme.typography.bodySmall, color = MutedText)
         }
+        // Pair HC-06 in Android system Bluetooth settings first, then connect here
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
@@ -183,7 +187,7 @@ private fun DeviceRow(
         }
         Button(
             onClick = onToggle,
-            enabled = connected || !busy,
+            enabled = connected || !busy, // only one connect attempt at a time
             shape = RoundedCornerShape(999.dp),
             colors = ButtonDefaults.buttonColors(containerColor = HydroBuddyColors.accentBlue)
         ) {

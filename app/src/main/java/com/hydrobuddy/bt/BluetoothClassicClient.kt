@@ -1,3 +1,5 @@
+// HC-06 Bluetooth Classic (SPP): connect, read SIP lines from bottle, send SET_HEALTH.
+
 package com.hydrobuddy.bt
 
 import android.bluetooth.BluetoothDevice
@@ -9,12 +11,6 @@ import java.io.OutputStream
 import java.util.UUID
 import kotlin.concurrent.thread
 
-/**
- * Minimal RFCOMM (SPP) client for HC-06.
- *
- * Inbound: "SIP" or "SIP,<count>,<gain>" triggers [onSip]. Other lines are ignored.
- * Outbound: [sendLine] (e.g. SET_HEALTH from the app).
- */
 class BluetoothClassicClient {
     private var socket: BluetoothSocket? = null
     private var output: OutputStream? = null
@@ -23,6 +19,7 @@ class BluetoothClassicClient {
     @Volatile
     private var onSip: (() -> Unit)? = null
 
+    /** Opens SPP socket to HC-06; background thread calls onSip when a line starts with SIP. */
     fun connect(device: BluetoothDevice, onSip: () -> Unit) {
         close()
         val sppUuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
@@ -44,12 +41,14 @@ class BluetoothClassicClient {
                     }
                 }
             } catch (_: IOException) {
+                // Socket closed or link lost
             }
         }
     }
 
     fun isConnected(): Boolean = socket?.isConnected == true
 
+    /** Sends one command line (caller adds payload, e.g. SET_HEALTH,42). */
     fun sendLine(command: String) {
         val stream = output ?: throw IOException("Not connected")
         stream.write((command.trim() + "\n").toByteArray())

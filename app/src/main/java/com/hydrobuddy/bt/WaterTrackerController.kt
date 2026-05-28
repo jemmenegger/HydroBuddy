@@ -1,3 +1,5 @@
+// Android wrapper: loads/saves buddy health in prefs, applies sip/preset/history edits.
+
 package com.hydrobuddy.bt
 
 import android.content.Context
@@ -5,14 +7,6 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 import kotlin.math.roundToInt
 
-/**
- * Stateful host for buddy + log entries. Owns:
- *   - profile-driven body multiplier
- *   - buddy health (live + persisted)
- *   - log entries (sip + preset)
- *
- * Persistence lives in a single SharedPreferences bag to stay slim.
- */
 class WaterTrackerController(
     private val prefs: SharedPreferences,
     private val profile: UserProfile
@@ -31,6 +25,7 @@ class WaterTrackerController(
         ensureDayBoundary(System.currentTimeMillis())
     }
 
+    /** Applies time drain, returns UI snapshot (health 0–99, fraction, mood). */
     fun snapshot(now: Long = System.currentTimeMillis()): BuddySnapshot {
         ensureDayBoundary(now)
         updateBuddy(now)
@@ -42,6 +37,7 @@ class WaterTrackerController(
         )
     }
 
+    /** Minute-by-minute health drain since last update. */
     fun updateBuddy(now: Long = System.currentTimeMillis()) {
         if (now <= buddy.lastUpdatedAt) return
         val newHealth = applyDepletionBetween(
@@ -55,10 +51,7 @@ class WaterTrackerController(
         persist()
     }
 
-    /**
-     * Log a single sip. Returns the affected entry (new or merged into the
-     * recent group within [SIP_GROUPING_WINDOW_MS]).
-     */
+    /** +8 health; may merge into previous sip row if within 30s. */
     fun logSip(
         currentEntries: MutableList<LogEntry>,
         now: Long = System.currentTimeMillis()
@@ -118,10 +111,7 @@ class WaterTrackerController(
         return entry
     }
 
-    /**
-     * Replace an entry (type / count / amount), recompute its healthGain, then
-     * replay today's history to keep buddy honest.
-     */
+    /** User changed a history row — recompute health from full day log. */
     fun applyEntryEdit(
         entries: MutableList<LogEntry>,
         targetId: String,
