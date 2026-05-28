@@ -123,7 +123,9 @@ class WaterTrackerController(
         val idx = entries.indexOfFirst { it.id == targetId }
         if (idx < 0) return null
         val old = entries[idx]
+        if (old.type == LogEntryType.Initial) return old
         val updated = when (newType) {
+            LogEntryType.Initial -> old
             LogEntryType.Sip -> {
                 val count = (newSipCount ?: 1).coerceAtLeast(1)
                 old.copy(

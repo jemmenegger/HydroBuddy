@@ -1,4 +1,4 @@
-// HC-06 Bluetooth Classic (SPP): connect, read SIP lines from bottle, send SET_HEALTH.
+// HC-06 Bluetooth Classic (SPP): connect, read SIP lines, send LINK + SET_HEALTH.
 
 package com.hydrobuddy.bt
 

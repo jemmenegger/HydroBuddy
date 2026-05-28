@@ -48,7 +48,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -96,6 +95,8 @@ fun HydroBuddyHomeScreen(
     entries: List<LogEntry>,
     snapshot: BuddySnapshot,
     feedbackTick: Int,
+    lastHandledFeedbackTick: Int,
+    onFeedbackHandled: () -> Unit,
     lastGain: Int,
     onSip: () -> Unit,
     onPreset: (PresetDrink) -> Unit,
@@ -104,8 +105,6 @@ fun HydroBuddyHomeScreen(
 ) {
     var selectedTab by remember { mutableStateOf(TopTab.Buddy) }
     var editTarget by remember { mutableStateOf<LogEntry?>(null) }
-    // Stored here (not inside BuddyGauge) so switching Buddy ↔ History does not replay sip animation
-    var lastHandledFeedbackTick by rememberSaveable { mutableIntStateOf(0) }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -127,7 +126,7 @@ fun HydroBuddyHomeScreen(
                     feedbackTick = feedbackTick,
                     lastGain = lastGain,
                     lastHandledFeedbackTick = lastHandledFeedbackTick,
-                    onFeedbackHandled = { lastHandledFeedbackTick = feedbackTick },
+                    onFeedbackHandled = onFeedbackHandled,
                     onSip = onSip,
                     onPreset = onPreset
                 )
@@ -542,7 +541,7 @@ private fun HistoryTab(entries: List<LogEntry>, onTapEntry: (LogEntry) -> Unit) 
                         .atZone(ZoneId.systemDefault())
                         .toLocalTime()
                         .format(timeFormatter),
-                    onClick = { onTapEntry(entry) }
+                    onClick = { if (entry.type != LogEntryType.Initial) onTapEntry(entry) }
                 )
             }
         }
@@ -560,10 +559,11 @@ private fun formatHistoryDate(date: LocalDate, formatter: DateTimeFormatter): St
 
 @Composable
 private fun HistoryRow(entry: LogEntry, timeText: String, onClick: () -> Unit) {
+    val editable = entry.type != LogEntryType.Initial
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = editable, onClick = onClick)
             .padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -581,7 +581,7 @@ private fun HistoryRow(entry: LogEntry, timeText: String, onClick: () -> Unit) {
             )
         }
         Text(
-            text = "+${entry.healthGain} health",
+            text = entryHealthText(entry),
             color = HydroBuddyColors.gainGreen,
             style = MaterialTheme.typography.titleMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Bold)
         )
@@ -595,6 +595,7 @@ private fun HistoryRow(entry: LogEntry, timeText: String, onClick: () -> Unit) {
 }
 
 private fun entryTitle(entry: LogEntry): String = when (entry.type) {
+    LogEntryType.Initial -> "Initial health"
     LogEntryType.Sip -> {
         val count = entry.sipCount ?: 1
         if (count == 1) "1 sip" else "$count sips"
@@ -606,11 +607,17 @@ private fun entryTitle(entry: LogEntry): String = when (entry.type) {
 }
 
 private fun entrySubtitle(entry: LogEntry, timeText: String): String = when (entry.type) {
+    LogEntryType.Initial -> "Starting point · $timeText"
     LogEntryType.Sip -> timeText
     LogEntryType.Preset -> {
         val ml = entry.amountMl
         if (ml != null) "$ml mL · $timeText" else timeText
     }
+}
+
+private fun entryHealthText(entry: LogEntry): String = when (entry.type) {
+    LogEntryType.Initial -> "${INITIAL_BUDDY_HEALTH.toInt()} health"
+    else -> "+${entry.healthGain} health"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

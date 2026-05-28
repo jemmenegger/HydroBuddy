@@ -34,6 +34,7 @@ object HydroBuddyColors {
 }
 
 /** Padding that respects notch, status bar, and navigation bar (edge-to-edge). */
+@Composable
 fun Modifier.hydroBuddyScreenPadding(): Modifier = this
     .windowInsetsPadding(WindowInsets.safeDrawing)
     .padding(horizontal = ScreenHorizontalPadding, vertical = ScreenTopPadding)

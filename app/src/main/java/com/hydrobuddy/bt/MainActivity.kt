@@ -61,9 +61,11 @@ class MainActivity : ComponentActivity() {
     private var tracker by mutableStateOf<WaterTrackerController?>(null)
     private var tick by mutableIntStateOf(0) // bumps every minute so Compose refreshes health
     private var feedbackTick by mutableIntStateOf(0) // increments on sip/preset → gauge animation
+    private var lastHandledFeedbackTick by mutableIntStateOf(0) // activity-level so Settings → Home does not replay
     private var lastGain by mutableIntStateOf(0)
     private var pendingStartupAutoConnect = false
     private var startupAutoConnectAttempted = false
+    private var lastPushedHealthToBottle: Int? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,6 +79,9 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = AppBackground
                 ) {
+                    if (appScreen != AppScreen.Onboarding) {
+                        TrackerBackgroundLoop()
+                    }
                     when (appScreen) {
                         AppScreen.Onboarding -> OnboardingFlow(onComplete = ::onOnboardingDone)
                         AppScreen.Home -> HomeRoute()
@@ -105,19 +110,24 @@ class MainActivity : ComponentActivity() {
         insetsController.isAppearanceLightNavigationBars = true
     }
 
+    /** Minute tick: depletion + one SET_HEALTH push when BT is open (no periodic heartbeat). */
     @Composable
-    private fun HomeRoute() {
+    private fun TrackerBackgroundLoop() {
         val activeTracker = tracker ?: return
-        if (userProfile == null) return
-
-        // Background loop: apply health drain every minute
         LaunchedEffect(Unit) {
             while (true) {
                 delay(TRACKER_TICK_MS)
                 activeTracker.updateBuddy()
                 tick++
+                pushHealthToArduino()
             }
         }
+    }
+
+    @Composable
+    private fun HomeRoute() {
+        val activeTracker = tracker ?: return
+        if (userProfile == null) return
 
         val snapshot = remember(tick, logEntries.size) { activeTracker.snapshot() }
         HydroBuddyHomeScreen(
@@ -125,6 +135,8 @@ class MainActivity : ComponentActivity() {
             entries = logEntries,
             snapshot = snapshot,
             feedbackTick = feedbackTick,
+            lastHandledFeedbackTick = lastHandledFeedbackTick,
+            onFeedbackHandled = { lastHandledFeedbackTick = feedbackTick },
             lastGain = lastGain,
             onSip = { handleSip(activeTracker) },
             onPreset = { preset -> handlePreset(activeTracker, preset) },
@@ -160,11 +172,22 @@ class MainActivity : ComponentActivity() {
         pushHealthToArduino()
     }
 
-    /** Sends SET_HEALTH,<n> on a worker thread so UI stays responsive. */
-    private fun pushHealthToArduino() {
+    /** Tells bottle the app SPP session opened or closed (not polled via SET_HEALTH). */
+    private fun pushBottleLink(open: Boolean) {
+        if (!btClient.isConnected()) return
+        try {
+            btClient.sendLine(if (open) "LINK,1" else "LINK,0")
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Sends SET_HEALTH,<n> only when health changed (sip, preset, depletion, connect). */
+    private fun pushHealthToArduino(force: Boolean = false) {
         if (!btClient.isConnected()) return
         val activeTracker = tracker ?: return
         val health = activeTracker.snapshot().health
+        if (!force && health == lastPushedHealthToBottle) return
+        lastPushedHealthToBottle = health
         thread {
             try {
                 btClient.sendLine("SET_HEALTH,$health")
@@ -207,6 +230,9 @@ class MainActivity : ComponentActivity() {
         )
         userProfile = profile
         tracker = WaterTrackerController.create(this, profile)
+        logEntries.clear()
+        logEntries.add(createInitialEntry())
+        persistEntries()
         persistProfile()
         appScreen = AppScreen.Home
     }
@@ -232,6 +258,10 @@ class MainActivity : ComponentActivity() {
         userProfile = profile
         tracker = WaterTrackerController.create(this, profile)
         loadEntries()
+        if (logEntries.isEmpty()) {
+            logEntries.add(createInitialEntry())
+            persistEntries()
+        }
         appScreen = AppScreen.Home
     }
 
@@ -262,9 +292,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun derivedHealthGain(type: LogEntryType, sipCount: Int?, amountMl: Int?): Int = when (type) {
+        LogEntryType.Initial -> 0
         LogEntryType.Sip -> (sipCount ?: 1) * SIP_HEALTH_GAIN
         LogEntryType.Preset -> amountMl?.let { PresetDrink.fromAmount(it)?.healthGain } ?: 0
     }
+
+    private fun createInitialEntry(now: Long = System.currentTimeMillis()): LogEntry =
+        LogEntry(
+            timestampMillis = now,
+            type = LogEntryType.Initial,
+            sipCount = null,
+            amountMl = null,
+            healthGain = 0
+        )
 
     private fun persistEntries() {
         val arr = JSONArray()
@@ -386,10 +426,13 @@ class MainActivity : ComponentActivity() {
         connectingDeviceAddress = null
         statusText = "Connected: ${device.name ?: device.address}"
         prefs.edit { putString(KEY_LAST_CONNECTED_DEVICE, device.address) }
-        pushHealthToArduino()
+        pushBottleLink(open = true)
+        pushHealthToArduino(force = true)
     }
 
     private fun disconnectDevice(clearLastDevice: Boolean = false) {
+        pushBottleLink(open = false)
+        lastPushedHealthToBottle = null
         btClient.close()
         connectedDeviceAddress = null
         connectingDeviceAddress = null

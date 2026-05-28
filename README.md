@@ -38,7 +38,7 @@ Pair the HC-06 in system Bluetooth settings first, then connect in app Settings.
 - OLED: SSD1306 128×64 @ `0x3C`
 - Upload `arduino/bottle_buddy/bottle_buddy.ino` with Leonardo selected in Arduino IDE
 
-Bluetooth protocol (newline-terminated): bottle → app `SIP` or `SIP,<count>,<gain>`; app → bottle `SET_HEALTH,<n>`.
+Bluetooth protocol (newline-terminated): bottle → app `SIP`; app → bottle `LINK,1` / `LINK,0` when the app opens or closes the connection in Settings, `SET_HEALTH,<n>` when health changes (no periodic heartbeat).
 
 ## Buddy logic (app)
 

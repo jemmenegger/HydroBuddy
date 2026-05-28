@@ -7,10 +7,10 @@ import java.time.ZoneId
 import java.util.UUID
 import kotlin.math.roundToInt
 
-const val INITIAL_BUDDY_HEALTH: Float = 75f
+const val INITIAL_BUDDY_HEALTH: Float = 66f
 const val MAX_BUDDY_HEALTH: Float = 99f
 const val MAX_BUDDY_HEALTH_INT: Int = 99
-const val GRACE_PERIOD_MINUTES: Float = 20f // no drain for this long after a drink
+const val GRACE_PERIOD_MINUTES: Float = 1f // usually 20 min; 1 min for testing
 const val BASE_DRAIN_PER_MINUTE: Float = 0.8f
 
 const val SIP_HEALTH_GAIN: Int = 8
@@ -18,7 +18,7 @@ const val SIP_GROUPING_WINDOW_MS: Long = 30_000L // merge rapid sips into one hi
 
 const val TRACKER_TICK_MS: Long = 60_000L // MainActivity refresh interval
 
-enum class LogEntryType { Sip, Preset }
+enum class LogEntryType { Initial, Sip, Preset }
 
 enum class PresetDrink(val amountMl: Int, val label: String, val healthGain: Int) {
     SmallGlass(150, "Small glass", 18),
@@ -139,7 +139,18 @@ fun recalculateBuddyFromHistory(
 
     val todayEntries = entries
         .filter { it.timestampMillis in startOfDay..now }
+        .filter { it.type != LogEntryType.Initial }
         .sortedBy { it.timestampMillis }
+
+    // If the day has no logs (e.g., user deletes the first/only sip), keep the
+    // default fresh-day baseline instead of draining from midnight to now.
+    if (todayEntries.isEmpty()) {
+        return BuddyState(
+            health = INITIAL_BUDDY_HEALTH,
+            lastDrinkAt = now,
+            lastUpdatedAt = now
+        )
+    }
 
     var health = INITIAL_BUDDY_HEALTH
     var lastDrinkAt = startOfDay

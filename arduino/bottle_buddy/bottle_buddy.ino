@@ -1,6 +1,5 @@
-// HydroBuddy bottle firmware — Leonardo + SSD1306 OLED + HC-06 (Serial1) + sip button D4.
-// Loop: debounced button → optional SIP to phone → animations → OLED redraw.
-// Phone is source of truth when connected (SET_HEALTH). Bottle sends SIP on physical sip.
+// HydroBuddy bottle — Leonardo + OLED + HC-06. Phone owns health/history.
+// Two screens: offline (no app link) and connected (buddy UI + SIP button).
 
 #include <Wire.h>
 #include <EEPROM.h>
@@ -20,10 +19,9 @@ constexpr int     OLED_HEIGHT  = 64;
 constexpr int     OLED_RESET   = -1;
 constexpr uint8_t BUTTON_PIN   = 4;
 
-// --- Buddy health (local copy; app overwrites via SET_HEALTH when linked) ---
-constexpr int     SIP_HEALTH_GAIN      = 8;
 constexpr int     MAX_BUDDY_HEALTH     = 99;
 constexpr int     LOW_HEALTH_THRESHOLD = 40;
+constexpr unsigned long GRACE_PERIOD_MS = 1UL * 60UL * 1000UL; // usually 20 min; 1 min for testing
 constexpr unsigned long MAX_TIME_WITHOUT_DRINK_MS = 60UL * 60UL * 1000UL;
 
 // --- EEPROM: magic byte, health 0–99, paired-once flag ---
@@ -40,8 +38,6 @@ constexpr int           SIP_POPUP_SLIDE_PX  = 3;
 constexpr unsigned long SPARKLE_BURST_MS    = 1200;
 constexpr unsigned long REDRAW_INTERVAL_MS  = 120;
 constexpr unsigned long BT_BUFFER_MAX       = 64;
-constexpr unsigned long BT_SYNC_STALE_MS    = 10UL * 60UL * 1000UL;
-constexpr unsigned long BT_SYNCING_MS       = 1500;
 
 constexpr int SPRITE_X = 2;
 constexpr int SPRITE_Y = 9;
@@ -77,7 +73,7 @@ const uint8_t PROGMEM kSpriteHappy46[] = {
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 
 int  buddyHealth      = 0;
-bool pairedOnce       = false; // false until app sends any BT line → show "Pair app" screen
+bool pairedOnce       = false; // set when app first sends SET_HEALTH (stored in EEPROM)
 unsigned long lastSipMillis = 0;
 
 int  lastButtonReading   = HIGH;
@@ -92,14 +88,42 @@ unsigned long sparkleUntilMs = 0;
 uint8_t displayedBarHealth = 0;
 
 unsigned long lastDrawMs  = 0;
-unsigned long lastBluetoothRxMillis = 0;
-bool syncSeenThisBoot     = false;
-bool syncPending          = false;
-unsigned long syncPendingStartedMs = 0;
+bool btSessionOpen         = false; // app sent LINK,1 (HydroBuddy connected in Settings)
+bool hasReceivedHealthSync = false;
+unsigned long justDrankUntilMs = 0;
 
 String btBuffer;
 
-void setup() { // OLED, EEPROM, first frame (pairing or buddy)
+void drawScreen();
+void drawOfflineScreen();
+
+bool isAppConnected() {
+  return btSessionOpen && hasReceivedHealthSync;
+}
+
+void clearDisplayState() {
+  hasReceivedHealthSync = false;
+  sipPopupCount = 0;
+  sparkleUntilMs = 0;
+  buddyHealth = 0;
+  displayedBarHealth = 0;
+  justDrankUntilMs = 0;
+}
+
+void clearAppSession() {
+  btSessionOpen = false;
+  clearDisplayState();
+}
+
+void redrawCurrentScreen() {
+  if (isAppConnected()) {
+    drawScreen();
+  } else {
+    drawOfflineScreen();
+  }
+}
+
+void setup() { // OLED, EEPROM, first frame (offline or connected)
   Serial.begin(9600);
   BTSerial.begin(9600);
 
@@ -119,11 +143,7 @@ void setup() { // OLED, EEPROM, first frame (pairing or buddy)
   lastSipMillis = millis();
   displayedBarHealth = (uint8_t)buddyHealth;
 
-  if (pairedOnce) {
-    drawScreen();
-  } else {
-    drawPairingScreen();
-  }
+  redrawCurrentScreen();
   lastDrawMs = millis();
 
   btBuffer.reserve(BT_BUFFER_MAX);
@@ -139,9 +159,7 @@ void loadFromEEPROM() { // read health + paired flag; init EEPROM on first boot
     buddyHealth = 0;
     return;
   }
-  uint8_t h = EEPROM.read(EEPROM_HEALTH_ADDR);
-  if (h > MAX_BUDDY_HEALTH) h = MAX_BUDDY_HEALTH;
-  buddyHealth = h;
+  buddyHealth = 0; // phone sets health via SET_HEALTH when connected
   pairedOnce  = EEPROM.read(EEPROM_PAIRED_ADDR) == 1;
 }
 
@@ -180,30 +198,18 @@ void handleButton() { // debounce D4; LOW = pressed
   }
 }
 
-void onSipPressed() { // +8 health locally, sparkle UI, send SIP,1,8 to phone
-  if (!pairedOnce) {
-    drawPairingScreen();
+void onSipPressed() { // connected only: notify phone; app replies with SET_HEALTH
+  if (!isAppConnected()) {
+    redrawCurrentScreen();
     lastDrawMs = millis();
     return;
   }
 
-  applyHealthGain(SIP_HEALTH_GAIN);
-  saveHealthToEEPROM();
-  lastSipMillis = millis();
-  recordLocalSip();
-
-  BTSerial.print(F("SIP,1,"));
-  BTSerial.println(SIP_HEALTH_GAIN);
+  BTSerial.println(F("SIP"));
+  // Sparkles / +N / status come from SET_HEALTH reply (same path as phone-logged drinks).
 }
 
-void applyHealthGain(int gain) {
-  long newHealth = (long)buddyHealth + gain;
-  if (newHealth > MAX_BUDDY_HEALTH) newHealth = MAX_BUDDY_HEALTH;
-  if (newHealth < 0)   newHealth = 0;
-  buddyHealth = (int)newHealth;
-}
-
-void recordLocalSip() {
+void showSipFeedback() {
   unsigned long now = millis();
 
   if (sipPopupCount > 0 && now < sipPopupUntilMs) {
@@ -214,12 +220,9 @@ void recordLocalSip() {
   sipMessageIndex = (uint8_t)((sipMessageIndex + 1) % 5);
   sipPopupUntilMs = now + SIP_POPUP_MS;
   sipPopupAnimStartMs = now;
-
   sparkleUntilMs = now + SPARKLE_BURST_MS;
-  syncPending = true;
-  syncPendingStartedMs = now;
 
-  drawScreen();
+  redrawCurrentScreen();
   lastDrawMs = now;
 }
 
@@ -227,16 +230,30 @@ void updateUiEffects() { // expire popups/sparkles; animate health bar toward bu
   unsigned long now = millis();
   bool changed = false;
 
+  static bool lastAppLinkUp = false;
+  bool appLinkUp = isAppConnected();
+  if (appLinkUp != lastAppLinkUp) {
+    lastAppLinkUp = appLinkUp;
+    changed = true;
+    if (!appLinkUp) {
+      clearDisplayState();
+    }
+  }
+
+  if (!appLinkUp) {
+    if (changed) {
+      redrawCurrentScreen();
+      lastDrawMs = now;
+    }
+    return;
+  }
+
   if (sipPopupCount > 0 && now >= sipPopupUntilMs) {
     sipPopupCount = 0;
     changed = true;
   }
   if (sparkleUntilMs != 0 && now >= sparkleUntilMs) {
     sparkleUntilMs = 0;
-    changed = true;
-  }
-  if (syncPending && (now - syncPendingStartedMs) >= BT_SYNCING_MS) {
-    syncPending = false;
     changed = true;
   }
   if (displayedBarHealth != (uint8_t)buddyHealth) {
@@ -256,19 +273,9 @@ void updateUiEffects() { // expire popups/sparkles; animate health bar toward bu
   }
 
   if (changed) {
-    if (pairedOnce) {
-      drawScreen();
-    } else {
-      drawPairingScreen();
-    }
+    redrawCurrentScreen();
     lastDrawMs = now;
   }
-}
-
-void noteSyncContact() {
-  syncSeenThisBoot = true;
-  lastBluetoothRxMillis = millis();
-  syncPending = false;
 }
 
 void readBluetooth() {
@@ -289,31 +296,51 @@ void readBluetooth() {
   }
 }
 
-void handleBluetoothLine(String line) { // only SET_HEALTH,<n> from app
+void handleBluetoothLine(String line) { // app → LINK,0|1 or SET_HEALTH,<n>
   line.trim();
   if (line.length() == 0) return;
 
-  markPairedIfNeeded();
-
-  if (line.startsWith("SET_HEALTH,")) {
-    noteSyncContact();
-    int v = line.substring(11).toInt();
-    if (v < 0) v = 0;
-    if (v > MAX_BUDDY_HEALTH) v = MAX_BUDDY_HEALTH;
-    buddyHealth = v;
-    saveHealthToEEPROM();
-    drawScreen();
+  if (line.startsWith("LINK,")) {
+    btSessionOpen = line.substring(5).toInt() != 0;
+    if (!btSessionOpen) {
+      clearAppSession();
+    } else {
+      markPairedIfNeeded();
+    }
+    redrawCurrentScreen();
     lastDrawMs = millis();
+    return;
   }
+
+  if (!line.startsWith("SET_HEALTH,")) return;
+
+  markPairedIfNeeded();
+  int v = line.substring(11).toInt();
+  if (v < 0) v = 0;
+  if (v > MAX_BUDDY_HEALTH) v = MAX_BUDDY_HEALTH;
+  unsigned long now = millis();
+
+  if (!hasReceivedHealthSync) {
+    hasReceivedHealthSync = true;
+    lastSipMillis = now - GRACE_PERIOD_MS;
+    justDrankUntilMs = 0;
+  } else if (v > buddyHealth) {
+    lastSipMillis = now;
+    justDrankUntilMs = now + GRACE_PERIOD_MS;
+    showSipFeedback(); // +1 popup, sparkles, fun status (sip, preset, or bottle button)
+  } else if (v < buddyHealth) {
+    justDrankUntilMs = 0;
+  }
+
+  buddyHealth = v;
+  saveHealthToEEPROM();
+  redrawCurrentScreen();
+  lastDrawMs = millis();
 }
 
 void maybeRedraw() {
   if (millis() - lastDrawMs < REDRAW_INTERVAL_MS) return;
-  if (pairedOnce) {
-    drawScreen();
-  } else {
-    drawPairingScreen();
-  }
+  redrawCurrentScreen();
   lastDrawMs = millis();
 }
 
@@ -359,7 +386,7 @@ void drawDropletFaceOverlay(uint8_t mood) {
 }
 
 const __FlashStringHelper* statusMessage() {
-  if (!pairedOnce)                      return F("Pair app");
+  // During +N sip popup: random fun lines (not "Just drank" yet).
   if (sipPopupCount > 0) {
     switch (sipMessageIndex) {
       case 0: return F("Nice!");
@@ -369,14 +396,18 @@ const __FlashStringHelper* statusMessage() {
       default: return F("Slurp!");
     }
   }
-  if (buddyHealth >= 80)                return F("Great job!");
   unsigned long sinceSip = millis() - lastSipMillis;
+  // After popup ends, still in grace: show "Just drank".
+  if (justDrankUntilMs > millis()) {
+    return F("Just drank");
+  }
   if (buddyHealth < LOW_HEALTH_THRESHOLD ||
       sinceSip >= MAX_TIME_WITHOUT_DRINK_MS) {
-    return F("Take sip");
+    return F("Time to drink");
   }
-  if (buddyHealth >= 55)                return F("Buddy ok");
-  return F("Need sip");
+  if (buddyHealth >= 80)                return F("Hydrated");
+  if (buddyHealth >= 55)                return F("Drink now");
+  return F("Time to drink");
 }
 
 void drawSparklePlus(int x, int y) {
@@ -417,41 +448,6 @@ void drawSparkles() {
   if (s3) drawSparkleBig(35, 7);
   if (s4) drawSparkleDiamond(42, 11);
   if (s5) drawSparklePlus(45, 17);
-}
-
-void drawSyncCheckIcon(int x, int y) {
-  display.drawLine(x + 1, y + 4, x + 3, y + 6, SSD1306_WHITE);
-  display.drawLine(x + 3, y + 6, x + 8, y + 1, SSD1306_WHITE);
-}
-
-void drawSyncingIcon(int x, int y) {
-  display.drawCircle(x + 4, y + 4, 3, SSD1306_WHITE);
-  display.drawPixel(x + 8, y + 4, SSD1306_BLACK);
-  display.drawLine(x + 6, y + 1, x + 8, y + 2, SSD1306_WHITE);
-  display.drawLine(x + 8, y + 2, x + 6, y + 3, SSD1306_WHITE);
-  if (((millis() / 250UL) & 1U) == 0U) {
-    display.drawPixel(x + 4, y + 4, SSD1306_WHITE);
-  }
-}
-
-void drawUnsyncedIcon(int x, int y) {
-  display.drawFastVLine(x + 4, y + 1, 4, SSD1306_WHITE);
-  display.drawPixel(x + 4, y + 7, SSD1306_WHITE);
-}
-
-void drawSyncIcon() {
-  const int iconX = 116;
-  const int iconY = 2;
-
-  if (syncPending) {
-    drawSyncingIcon(iconX, iconY);
-    return;
-  }
-  if (syncSeenThisBoot && (millis() - lastBluetoothRxMillis) <= BT_SYNC_STALE_MS) {
-    drawSyncCheckIcon(iconX, iconY);
-    return;
-  }
-  drawUnsyncedIcon(iconX, iconY);
 }
 
 void drawHealthValue(int health) {
@@ -545,7 +541,6 @@ void drawScreen() { // full buddy UI: sprite, health, bar, status, sip popup
   drawSparkles();
   display.drawBitmap(SPRITE_X, SPRITE_Y, kSpriteHappy46, SPRITE_W, SPRITE_H, SSD1306_WHITE);
   drawDropletFaceOverlay(currentFaceMood());
-  drawSyncIcon();
 
   drawHealthValue(buddyHealth);
   drawHealthBar(54, 35, 70, 10, displayedBarHealth);
@@ -555,24 +550,35 @@ void drawScreen() { // full buddy UI: sprite, health, bar, status, sip popup
   display.display();
 }
 
-void drawPairingScreen() { // before first app pairing: --/99 and sad face
+void drawCableIcon() {
+  const int plugX = 6;
+  const int plugY = 30;
+  display.fillRect(plugX, plugY, 16, 10, SSD1306_WHITE);
+  display.fillRect(plugX + 3, plugY + 2, 10, 6, SSD1306_BLACK);
+  display.fillRect(plugX - 5, plugY + 2, 4, 2, SSD1306_WHITE);
+  display.fillRect(plugX - 5, plugY + 6, 4, 2, SSD1306_WHITE);
+  display.drawFastVLine(plugX + 8, plugY + 10, 14, SSD1306_WHITE);
+  display.drawLine(plugX + 8, plugY + 24, plugX + 20, plugY + 30, SSD1306_WHITE);
+  display.drawLine(plugX + 20, plugY + 30, plugX + 28, plugY + 30, SSD1306_WHITE);
+}
+
+void drawOfflineScreen() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
-  drawSparkles();
-  display.drawBitmap(SPRITE_X, SPRITE_Y, kSpriteHappy46, SPRITE_W, SPRITE_H, SSD1306_WHITE);
-  drawDropletFaceOverlay(3);
-  drawSyncIcon();
-
-  display.setTextSize(3);
-  display.setCursor(60, 10);
-  display.print(F("--"));
-
   display.setTextSize(1);
-  display.setCursor(95, 24);
-  display.print(F("/99"));
 
-  drawHealthBar(54, 35, 70, 10, 0);
-  drawStatusMessage();
+  int16_t x1, y1;
+  uint16_t tw, th;
+  display.getTextBounds(F("Not connected"), 0, 0, &x1, &y1, &tw, &th);
+  display.setCursor((OLED_WIDTH - (int)tw) / 2, 2);
+  display.print(F("Not connected"));
+
+  drawCableIcon();
+
+  display.setCursor(58, 28);
+  display.print(F("Connect in"));
+  display.setCursor(58, 40);
+  display.print(F("app Settings"));
 
   display.display();
 }
